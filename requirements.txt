@@ -5,3 +5,4 @@ faster-whisper
 pystray
 Pillow
 pyinstaller
+av>=11,<19
