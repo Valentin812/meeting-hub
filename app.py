@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.12"
+VERSION="1.1.13"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -151,7 +151,7 @@ class Recorder:
         return path
 
 MEETING_PROCS=("zoom.exe","ms-teams.exe","teams.exe","webex.exe","webexmta.exe","skype.exe")
-TITLE_KEYS=("zoom meeting","microsoft teams","google meet","webex","yandex telemost","яндекс телемост","телемост","meeting","встреч","созвон","звонок","конферен","conference")
+TITLE_KEYS=("zoom meeting","zoom meeting controls","microsoft teams","teams meeting","google meet","meet.google.com","webex","yandex telemost","яндекс телемост","телемост","webex meeting","конференция","conference call")
 
 def windows_meeting_title():
     found=[]; user32=ctypes.windll.user32; kernel32=ctypes.windll.kernel32
@@ -167,6 +167,7 @@ def windows_meeting_title():
             if kernel32.QueryFullProcessImageNameW(h,0,pbuf,ctypes.byref(size)): process=Path(pbuf.value).name.lower()
             kernel32.CloseHandle(h)
         low=title.lower()
+        if process in ("meetinghub.exe","meetinghub-debug.exe"): return True
         if process in MEETING_PROCS or any(k in low for k in TITLE_KEYS): found.append((title,process))
         return True
     user32.EnumWindows(EnumProc(cb),0); return found[0] if found else None
