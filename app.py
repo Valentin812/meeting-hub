@@ -10,6 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
+VERSION="1.1.2"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -197,7 +198,9 @@ class AutoDetector:
         while self.run:
             try:
                 hit=windows_meeting_title()
-                if hit and not self.app.rec and not self.pending:
+                if not hit:
+                    self.app.force_stop_lock=False
+                if hit and not self.app.rec and not self.pending and not self.app.force_stop_lock:
                     self.pending=True; self.app.after(0,lambda h=hit:self._start(h))
                 elif not hit and self.app.rec and self.app.auto_mode and not self.app.processing:
                     self.app.after(0,self.app.auto_stop)
@@ -209,20 +212,21 @@ class AutoDetector:
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title("Meeting Hub"); self.geometry("1050x700"); self.configure(bg="#101218")
-        self.rec=None; self.started=None; self.auto_mode=False; self.processing=False; self.mic_muted=False; self.last_recording=None
+        super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
+        self.rec=None; self.started=None; self.auto_mode=False; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
-        tk.Label(left,text="MEETING",bg="#151820",fg="white",font=("Segoe UI",11,"bold")).pack(pady=(25,0)); tk.Label(left,text="HUB",bg="#151820",fg="#7c8cff",font=("Segoe UI",20,"bold")).pack(pady=(0,25))
+        tk.Label(left,text="MEETING",bg="#151820",fg="white",font=("Segoe UI",11,"bold")).pack(pady=(25,0)); tk.Label(left,text="HUB",bg="#151820",fg="#7c8cff",font=("Segoe UI",20,"bold")).pack(pady=(0,2))
+        tk.Label(left,text="v"+VERSION,bg="#151820",fg="#6f7787",font=("Segoe UI",9)).pack(pady=(0,25))
         for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks)]: tk.Button(left,text=name,command=cmd,anchor="w",bg="#151820",fg="#b0b7c5",bd=0,padx=20,pady=10).pack(fill="x")
         self.home()
     def setup_tray(self):
         menu=pystray.Menu(
             pystray.MenuItem(lambda item:self.tray_status(),lambda icon,item:False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(lambda item:"■ Остановить запись",self.tray_stop,enabled=lambda item:self.rec is not None),
+            pystray.MenuItem(lambda item:"■ Принудительно остановить запись",self.tray_stop,enabled=lambda item:self.rec is not None),
             pystray.MenuItem(lambda item:"🔇 Включить микрофон" if self.mic_muted else "🔇 Выключить микрофон",self.tray_mute,enabled=lambda item:self.rec is not None),
             pystray.MenuItem("📁 Открыть записи",lambda icon,item:open_recordings_folder()),
             pystray.MenuItem("Последние записи",pystray.Menu(lambda:self.recording_items())),
@@ -230,7 +234,8 @@ class App(tk.Tk):
             pystray.MenuItem("Открыть Meeting Hub",lambda icon,item:self.show_window()),
             pystray.MenuItem("Выйти",lambda icon,item:self.quit_app())
         )
-        self.icon=pystray.Icon("MeetingHub",tray_image(), "Meeting Hub",menu)
+        menu=pystray.Menu(*list(menu), pystray.MenuItem("Meeting Hub v"+VERSION,lambda icon,item:None,enabled=False))
+        self.icon=pystray.Icon("MeetingHub",tray_image(), "Meeting Hub v"+VERSION,menu)
         try:
             self.icon.run_detached()
         except Exception:
@@ -280,7 +285,12 @@ class App(tk.Tk):
         if not self.rec: self.start_recording()
         else: self.stop_recording()
     def auto_stop(self): self.stop_recording()
-    def tray_stop(self,icon,item): self.after(0,self.stop_recording)
+    def tray_stop(self,icon,item): self.after(0,self.force_stop_recording)
+    def force_stop_recording(self):
+        if not self.rec or self.processing: return
+        self.force_stop_lock=True
+        self.auto_mode=False
+        self.stop_recording()
     def tray_mute(self,icon,item):
         self.after(0,self.toggle_mute)
     def toggle_mute(self):
