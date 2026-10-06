@@ -193,8 +193,9 @@ class MeetingDetail(tk.Toplevel):
         ttk.Label(f,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w")
         tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
         row=ttk.Frame(f); row.pack(fill="x",pady=(8,0))
-        ttk.Button(row,text="▶ Открыть запись",command=lambda:self.play(m["audio"])).pack(side="left")
-        ttk.Button(row,text="📁 Открыть папку",command=lambda:open_recordings_folder()).pack(side="left",padx=8)
+        ttk.Button(row,text="▶ Открыть исходную запись",command=lambda:self.play(m["audio"])).pack(side="left")
+        ttk.Button(row,text="📁 Открыть папку с исходниками",command=lambda:open_recordings_folder()).pack(side="left",padx=8)
+        ttk.Label(f,text="Исходник: "+(m["audio"] or "не найден"),wraplength=820).pack(anchor="w",pady=(8,0))
     def play(self,path):
         if not path or not Path(path).exists(): messagebox.showerror("Запись","Файл записи не найден"); return
         try: os.startfile(path)
@@ -226,7 +227,7 @@ class AutoDetector:
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
-        self.rec=None; self.started=None; self.auto_mode=False; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False
+        self.rec=None; self.started=None; self.auto_mode=False; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
     def build(self):
@@ -363,7 +364,8 @@ class App(tk.Tk):
             c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
             for x in d.get("tasks",[]) or []:
                 c.execute("insert into tasks(meeting_id,project,task,owner,deadline,status,created) values(?,?,?,?,?,?,?)",(mid,project,x.get("task",""),x.get("owner",""),x.get("deadline",""),"open",now))
-            c.commit(); c.close(); self.pending_meeting_id=None; self.home()
+            c.commit(); c.close(); self.pending_meeting_id=None; self.status.set("Встреча сохранена")
+            self.meetings()
             try: self.icon.notify("Встреча сохранена",f"{title} • {path.name}")
             except Exception: pass
         except Exception as e:
