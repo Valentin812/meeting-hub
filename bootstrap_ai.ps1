@@ -23,4 +23,5 @@ if (-not $ollama) {
 }
 if (-not $ollama) { throw "Ollama installation failed" }
 
-& $ollama pull $model
+$p = Start-Process -FilePath $ollama -ArgumentList @("pull",$model) -WindowStyle Hidden -Wait -PassThru
+if ($p.ExitCode -ne 0) { throw "Ollama model installation failed (exit code $($p.ExitCode))" }
