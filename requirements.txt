@@ -2,4 +2,6 @@ soundcard
 soundfile
 numpy
 faster-whisper
+pystray
+Pillow
 pyinstaller
