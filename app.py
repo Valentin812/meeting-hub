@@ -339,6 +339,66 @@ class App(tk.Tk):
         self.rec_btn=tk.Button(f,text="● НАЧАТЬ ЗАПИСЬ",command=self.toggle,bg="#7c8cff",fg="white",bd=0,padx=20,pady=12); self.rec_btn.pack(anchor="w",pady=12)
     def show_window(self): self.deiconify(); self.lift(); self.focus_force()
     def hide_to_tray(self): self.withdraw()
+    def show_recording_overlay(self):
+        self.overlay_hidden=False
+        if self.recording_overlay:
+            self.recording_overlay.deiconify(); self.recording_overlay.lift(); return
+        w=tk.Toplevel(self); self.recording_overlay=w
+        w.overrideredirect(True); w.attributes("-topmost",True); w.configure(bg="#181a20")
+        w.bind("<Enter>",lambda e:self.set_overlay_expanded(True))
+        w.bind("<Leave>",lambda e:self.set_overlay_expanded(False))
+        body=tk.Frame(w,bg="#181a20",padx=10,pady=7); body.pack()
+        self.overlay_dot=tk.Label(body,text="●",bg="#181a20",fg="#20a8d8",font=("Segoe UI",13,"bold")); self.overlay_dot.pack(side="left",padx=(0,6))
+        self.overlay_bars=tk.Canvas(body,width=54,height=22,bg="#181a20",highlightthickness=0); self.overlay_bars.pack(side="left")
+        self.overlay_timer=tk.Label(body,text="00:00",bg="#181a20",fg="#d8dce5",font=("Segoe UI",9,"bold")); self.overlay_timer.pack(side="left",padx=7)
+        self.overlay_controls=tk.Frame(body,bg="#181a20")
+        self.overlay_mute=tk.Button(self.overlay_controls,text="🎤",command=self.toggle_mute,bg="#181a20",fg="#d8dce5",bd=0,activebackground="#292d36",activeforeground="white",font=("Segoe UI",11),padx=5)
+        self.overlay_mute.pack(side="left")
+        self.overlay_stop=tk.Button(self.overlay_controls,text="■",command=self.force_stop_recording,bg="#e84b55",fg="white",bd=0,activebackground="#ff606a",font=("Segoe UI",10,"bold"),padx=7,pady=2)
+        self.overlay_stop.pack(side="left",padx=3)
+        self.overlay_close=tk.Button(self.overlay_controls,text="×",command=self.hide_recording_overlay,bg="#181a20",fg="#8d93a0",bd=0,activebackground="#292d36",activeforeground="white",font=("Segoe UI",12),padx=4)
+        self.overlay_close.pack(side="left")
+        self.set_overlay_expanded(False)
+        w.update_idletasks(); self.position_overlay(); self.update_overlay()
+
+    def position_overlay(self):
+        if not self.recording_overlay: return
+        self.recording_overlay.update_idletasks()
+        sw=self.recording_overlay.winfo_screenwidth()
+        self.recording_overlay.geometry(f"+{max(10,sw-self.recording_overlay.winfo_width()-18)}+18")
+
+    def set_overlay_expanded(self,value):
+        if not self.recording_overlay: return
+        if value: self.overlay_controls.pack(side="left")
+        else: self.overlay_controls.pack_forget()
+        self.position_overlay()
+
+    def hide_recording_overlay(self):
+        self.overlay_hidden=True
+        if self.recording_overlay: self.recording_overlay.withdraw()
+
+    def destroy_recording_overlay(self):
+        if self.overlay_after:
+            try: self.after_cancel(self.overlay_after)
+            except Exception: pass
+        self.overlay_after=None
+        if self.recording_overlay:
+            try: self.recording_overlay.destroy()
+            except Exception: pass
+        self.recording_overlay=None
+
+    def update_overlay(self):
+        if not self.recording_overlay or not self.rec: return
+        try:
+            sec=int((datetime.now()-self.started).total_seconds()) if self.started else 0
+            self.overlay_timer.config(text=f"{sec//60:02d}:{sec%60:02d}")
+            self.overlay_mute.config(text="🔇" if self.mic_muted else "🎤")
+            c=self.overlay_bars; c.delete("all"); level=getattr(self.rec,"level",0.0)
+            vals=[max(2,min(20,int(level*(i+1)/6*20)+2)) for i in range(6)]
+            for i,h in enumerate(vals): c.create_rectangle(i*9+1,22-h,i*9+7,22,fill="#20a8d8",outline="")
+        except Exception: pass
+        self.overlay_after=self.after(200,self.update_overlay)
+
     def start_recording(self,title=None,auto=False):
         if self.rec: return
         try:
