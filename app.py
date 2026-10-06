@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.7"
+VERSION="1.1.8"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -79,7 +79,7 @@ def ai_analyze(transcript,project=""):
     if not exe:
         return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Локальный AI не найден. Запустите установщик Meeting Hub ещё раз или дождитесь установки локального AI."}
     try:
-        r=subprocess.run([exe,"run",OLLAMA,prompt,"--format","json"],capture_output=True,text=True,timeout=300)
+        r=subprocess.run([exe,"run",OLLAMA,prompt,"--format","json"],capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=300)
         s=r.stdout.strip(); a=s.find("{"); b=s.rfind("}")
         if a>=0 and b>a:
             raw=s[a:b+1]
