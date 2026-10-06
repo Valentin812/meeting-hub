@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.3"
+VERSION="1.1.4"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -322,8 +322,23 @@ class App(tk.Tk):
         if hasattr(self,"rec_btn"): self.rec_btn.config(text="Обработка…",state="disabled")
         self.refresh_tray()
         result=r.stop(p); self.last_recording=result
+        self.pending_meeting_id=None
         if result:
             self.status.set("Запись сохранена: "+result.name)
+            # Сначала сохраняем саму встречу в БД. Даже если AI упадёт,
+            # запись и встреча не потеряются и появятся во вкладке «Встречи».
+            try:
+                c=db(); now=datetime.now().isoformat(timespec="seconds")
+                project=self.project.get() or ""
+                title=self.titlev.get() or "Новая встреча"
+                c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
+                c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",(title,project,now,str(result),"","","","",json.dumps([],ensure_ascii=False),"draft"))
+                self.pending_meeting_id=c.execute("select last_insert_rowid()").fetchone()[0]
+                c.commit(); c.close()
+            except Exception as e:
+                self.pending_meeting_id=None
+                try: messagebox.showerror("Сохранение встречи","Не удалось создать запись встречи в базе данных:\n"+str(e))
+                except Exception: pass
             try: self.icon.notify("Запись сохранена",result.name)
             except Exception: pass
         def work():
@@ -336,13 +351,25 @@ class App(tk.Tk):
         self.processing=False; self.refresh_tray(); Review(self,data,lambda d:self.save_meeting(d,path,tr))
     def save_meeting(self,d,path,tr):
         c=db(); project=d.get("project") or self.project.get() or ""; now=datetime.now().isoformat(timespec="seconds"); title=d.get("title") or self.titlev.get()
-        c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
-        c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",(title,project,now,str(path),tr,"","","",json.dumps(d.get("points",[]),ensure_ascii=False),"approved"))
-        mid=c.execute("select last_insert_rowid()").fetchone()[0]
-        for x in d.get("tasks",[]) or []: c.execute("insert into tasks(meeting_id,project,task,owner,deadline,status,created) values(?,?,?,?,?,?,?)",(mid,project,x.get("task",""),x.get("owner",""),x.get("deadline",""),"open",now))
-        c.commit(); c.close(); self.home()
-        try: self.icon.notify("Встреча сохранена",f"{title} • {path.name}")
-        except Exception: pass
+        try:
+            mid=self.pending_meeting_id
+            if mid:
+                c.execute("update meetings set title=?,project=?,transcript=?,points=?,status=? where id=?",(title,project,tr,json.dumps(d.get("points",[]),ensure_ascii=False),"approved",mid))
+                c.execute("delete from tasks where meeting_id=?",(mid,))
+            else:
+                c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
+                c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",(title,project,now,str(path),tr,"","","",json.dumps(d.get("points",[]),ensure_ascii=False),"approved"))
+                mid=c.execute("select last_insert_rowid()").fetchone()[0]
+            c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
+            for x in d.get("tasks",[]) or []:
+                c.execute("insert into tasks(meeting_id,project,task,owner,deadline,status,created) values(?,?,?,?,?,?,?)",(mid,project,x.get("task",""),x.get("owner",""),x.get("deadline",""),"open",now))
+            c.commit(); c.close(); self.pending_meeting_id=None; self.home()
+            try: self.icon.notify("Встреча сохранена",f"{title} • {path.name}")
+            except Exception: pass
+        except Exception as e:
+            try: c.rollback(); c.close()
+            except Exception: pass
+            messagebox.showerror("Сохранение встречи","Не удалось сохранить изменения:\n"+str(e))
     def meetings(self):
         self.clear(); tk.Label(self.main,text="Встречи",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w",padx=30,pady=25)
         c=db(); rows=c.execute("select * from meetings order by id desc limit 50").fetchall(); c.close()
