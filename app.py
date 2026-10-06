@@ -113,7 +113,7 @@ class Recorder:
         sf.write(str(path),np.column_stack((m[:n,0],s[:n,0])),self.rate,subtype="PCM_16"); return path
 
 MEETING_PROCS=("zoom.exe","ms-teams.exe","teams.exe","webex.exe","webexmta.exe","skype.exe")
-TITLE_KEYS=("zoom meeting","microsoft teams","google meet","webex","meeting","встреч","созвон","звонок","конферен","conference")
+TITLE_KEYS=("zoom meeting","microsoft teams","google meet","webex","yandex telemost","яндекс телемост","телемост","meeting","встреч","созвон","звонок","конферен","conference")
 
 def windows_meeting_title():
     found=[]; user32=ctypes.windll.user32; kernel32=ctypes.windll.kernel32
@@ -220,7 +220,7 @@ class App(tk.Tk):
         self.home()
     def setup_tray(self):
         menu=pystray.Menu(
-            pystray.MenuItem(lambda item:self.tray_status(),lambda item:False),
+            pystray.MenuItem(lambda item:self.tray_status(),lambda icon,item:False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lambda item:"■ Остановить запись",self.tray_stop,enabled=lambda item:self.rec is not None),
             pystray.MenuItem(lambda item:"🔇 Включить микрофон" if self.mic_muted else "🔇 Выключить микрофон",self.tray_mute,enabled=lambda item:self.rec is not None),
@@ -231,7 +231,10 @@ class App(tk.Tk):
             pystray.MenuItem("Выйти",lambda icon,item:self.quit_app())
         )
         self.icon=pystray.Icon("MeetingHub",tray_image(), "Meeting Hub",menu)
-        threading.Thread(target=self.icon.run,daemon=True).start()
+        try:
+            self.icon.run_detached()
+        except Exception:
+            threading.Thread(target=self.icon.run,daemon=True).start()
     def tray_status(self):
         if self.rec: return ("🔴 Запись идёт" + (" • микрофон выключен" if self.mic_muted else ""))
         return "⚪ Ожидание встречи"
