@@ -27,7 +27,7 @@ jobs:
           @'
           [Setup]
           AppName=Meeting Hub
-          AppVersion=1.1.9
+          AppVersion=1.1.10
           DefaultDirName={localappdata}\Programs\Meeting Hub
           OutputDir=.
           OutputBaseFilename=MeetingHubSetup
@@ -40,7 +40,7 @@ jobs:
           Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
           Name: "{group}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
           [Run]
-          Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap_ai.ps1"""; Description: "Preparing local AI (first install may take a few minutes)"; Flags: postinstall waituntilterminated
+          Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap_ai.ps1"""; Description: "Preparing local AI (first install may take a few minutes)"; Flags: runhidden postinstall waituntilterminated
           Filename: "{app}\MeetingHub.exe"; Description: "Launch Meeting Hub"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content installer\MeetingHub.iss -Encoding UTF8
           Push-Location installer
