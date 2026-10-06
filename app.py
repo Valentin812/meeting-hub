@@ -406,6 +406,7 @@ class App(tk.Tk):
             if title: self.titlev.set(title[:120])
             self.status.set("🔴 Идёт запись" + (" • автоматически" if auto else ""))
             if hasattr(self,"rec_btn"): self.rec_btn.config(text="■ ОСТАНОВИТЬ")
+            self.show_recording_overlay()
             self.refresh_tray()
         except Exception as e: self.rec=None; messagebox.showerror("Аудио",str(e))
     def auto_start(self,title):
@@ -487,6 +488,7 @@ class App(tk.Tk):
         self.refresh_tray()
     def stop_recording(self):
         if not self.rec or self.processing: return
+        self.destroy_recording_overlay()
         self.processing=True; p=RECORDINGS/(datetime.now().strftime("%Y%m%d_%H%M%S")+".wav"); r=self.rec; self.rec=None; self.auto_mode=False; self.mic_muted=False
         if hasattr(self,"rec_btn"): self.rec_btn.config(text="Обработка…",state="disabled")
         self.refresh_tray()
@@ -555,6 +557,7 @@ class App(tk.Tk):
     def done(self,i):
         c=db(); c.execute("update tasks set status='done' where id=?",(i,)); c.commit(); c.close(); self.tasks()
     def quit_app(self):
+        self.destroy_recording_overlay()
         if self.rec: self.stop_recording()
         try: self.icon.stop()
         except Exception: pass
