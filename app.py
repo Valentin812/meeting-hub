@@ -243,10 +243,15 @@ class App(tk.Tk):
     def tray_status(self):
         if self.rec: return ("🔴 Запись идёт" + (" • микрофон выключен" if self.mic_muted else ""))
         return "⚪ Ожидание встречи"
+    def _recording_action(self,path):
+        def action(icon,item):
+            try: os.startfile(str(path))
+            except Exception: pass
+        return action
     def recording_items(self):
         files=sorted(RECORDINGS.glob("*.wav"),key=lambda p:p.stat().st_mtime,reverse=True)[:8]
         if not files: return [pystray.MenuItem("Записей пока нет",lambda i,j:None,enabled=False)]
-        return [pystray.MenuItem(p.name,lambda icon,item,path=str(p):os.startfile(path)) for p in files]
+        return [pystray.MenuItem(p.name,self._recording_action(p)) for p in files]
     def refresh_tray(self):
         try:
             self.icon.icon=tray_image(bool(self.rec),self.mic_muted)
