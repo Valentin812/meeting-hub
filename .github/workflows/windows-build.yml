@@ -15,16 +15,14 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - name: Build EXE
         run: pyinstaller --noconfirm --clean --windowed --name MeetingHub --collect-all faster_whisper --collect-all ctranslate2 app.py
-      - name: Locate Inno Setup
-        shell: pwsh
-        run: |
-          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-          if (-not $iscc) { $iscc = Get-ChildItem 'C:Program Files*' -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 }
-          if (-not $iscc) { throw 'ISCC.exe not found' }
-          "ISCC=$($iscc.Source)" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Create installer
         shell: pwsh
         run: |
+          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $iscc = Get-ChildItem 'C:\Program Files*' -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'ISCC.exe not found' }
           New-Item -ItemType Directory -Force -Path installer | Out-Null
           @'
           [Setup]
@@ -43,7 +41,7 @@ jobs:
           [Run]
           Filename: "{app}MeetingHub.exe"; Description: "Запустить Meeting Hub"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content installerMeetingHub.iss -Encoding UTF8
-          & $env:ISCC installerMeetingHub.iss
+          & $iscc.Source installerMeetingHub.iss
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
