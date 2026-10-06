@@ -1,0 +1,120 @@
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+from pathlib import Path
+from datetime import datetime
+import json, threading, time, os, subprocess, webbrowser
+
+from db import *
+from audio import AudioRecorder
+from ai import transcribe, transcribe_multichannel, analyze, ask_history
+
+
+class AIReviewDialog(tk.Toplevel):
+    """v24 review screen: user approves/edits AI output before it becomes project memory."""
+
+
+    def open_ai_review(self, analysis, save_callback):
+        """Show editable AI result before saving it to the working memory."""
+        AIReviewDialog(self, analysis, save_callback)
+    def __init__(self, parent, analysis, on_apply):
+        super().__init__(parent)
+        self.parent = parent
+        self.analysis = analysis or {}
+        self.on_apply = on_apply
+        self.title("Проверка AI-разбора")
+        self.geometry("900x760")
+        self.minsize(760, 620)
+        self.transient(parent)
+        self.grab_set()
+
+        outer = ttk.Frame(self, padding=18)
+        outer.pack(fill="both", expand=True)
+
+        ttk.Label(
+            outer,
+            text="Проверь результат встречи перед сохранением",
+            font=("Segoe UI", 16, "bold")
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outer,
+            text="AI подготовил черновик. Изменения можно внести прямо здесь.",
+            foreground="#666666"
+        ).pack(anchor="w", pady=(4, 14))
+
+        self.canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.canvas.yview)
+        self.form = ttk.Frame(self.canvas)
+        self.form.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas.create_window((0, 0), window=self.form, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.project_var = tk.StringVar(value=self.analysis.get("project", ""))
+        self.summary_var = tk.StringVar(value=self.analysis.get("summary", ""))
+        self.project_summary_var = tk.StringVar(
+            value=self.analysis.get("project_summary", "")
+        )
+
+        self._field("Проект", self.project_var)
+        self._field("Краткий итог", self.summary_var)
+        self._field("Текущее состояние проекта", self.project_summary_var)
+
+        self._list_editor("Ключевые пункты", "key_points")
+        self._list_editor("Решения", "decisions")
+        self._list_editor("Вопросы", "questions")
+        self._task_editor()
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill="x", pady=(14, 0))
+
+        ttk.Button(
+            buttons,
+            text="← Назад к записи",
+            command=self.destroy
+        ).pack(side="left")
+
+        ttk.Button(
+            buttons,
+            text="✓ Подтвердить и сохранить",
+            command=self._apply
+        ).pack(side="right")
+
+    def _field(self, label, variable):
+        box = ttk.LabelFrame(self.form, text=label, padding=10)
+        box.pack(fill="x", pady=5)
+        entry = ttk.Entry(box, textvariable=variable)
+        entry.pack(fill="x")
+
+    def _list_editor(self, label, key):
+        box = ttk.LabelFrame(self.form, text=label, padding=10)
+        box.pack(fill="both", expand=True, pady=5)
+
+        frame = ttk.Frame(box)
+        frame.pack(fill="both", expand=True)
+
+        values = self.analysis.get(key, [])
+        if isinstance(values, str):
+            values = [values]
+
+        rows = []
+        for value in values:
+            row = ttk.Frame(frame)
+            row.pack(fill="x", pady=2)
+            var = tk.StringVar(value=str(value))
+            ttk.Entry(row, textvariable=var).pack(side="left", fill="x", expand=True)
+            ttk.Button(
+                row, text="×", width=3,
+                command=lambda r=row: self._remove_row(r)
+            ).pack(side="right", padx=(5, 0))
+            rows.append(var)
+
+        ttk.Button(
+            box, text="+ Добавить",
+            command=lambda: self._add_list_row(frame, rows)
+        ).pack(anchor="w", pady=(6, 0))
