@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.13"
+VERSION="1.1.14"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -353,11 +353,14 @@ class App(tk.Tk):
         self.overlay_bars=tk.Canvas(body,width=54,height=22,bg="#181a20",highlightthickness=0); self.overlay_bars.pack(side="left")
         self.overlay_timer=tk.Label(body,text="00:00",bg="#181a20",fg="#d8dce5",font=("Segoe UI",9,"bold")); self.overlay_timer.pack(side="left",padx=7)
         self.overlay_controls=tk.Frame(body,bg="#181a20")
-        self.overlay_mute=tk.Button(self.overlay_controls,text="🎤",command=self.toggle_mute,bg="#181a20",fg="#d8dce5",bd=0,activebackground="#292d36",activeforeground="white",font=("Segoe UI",11),padx=5)
+        self.overlay_mute=tk.Label(self.overlay_controls,text="🎤",bg="#181a20",fg="#d8dce5",font=("Segoe UI",11),padx=7,pady=2,cursor="hand2")
+        self.overlay_mute.bind("<ButtonRelease-1>",lambda e:self.toggle_mute())
         self.overlay_mute.pack(side="left")
-        self.overlay_stop=tk.Button(self.overlay_controls,text="■",command=self.force_stop_recording,bg="#e84b55",fg="white",bd=0,activebackground="#ff606a",font=("Segoe UI",10,"bold"),padx=7,pady=2)
+        self.overlay_stop=tk.Label(self.overlay_controls,text="■",bg="#e84b55",fg="white",font=("Segoe UI",10,"bold"),padx=8,pady=3,cursor="hand2")
+        self.overlay_stop.bind("<ButtonRelease-1>",lambda e:self.force_stop_recording())
         self.overlay_stop.pack(side="left",padx=3)
-        self.overlay_close=tk.Button(self.overlay_controls,text="×",command=self.hide_recording_overlay,bg="#181a20",fg="#8d93a0",bd=0,activebackground="#292d36",activeforeground="white",font=("Segoe UI",12),padx=4)
+        self.overlay_close=tk.Label(self.overlay_controls,text="×",bg="#181a20",fg="#8d93a0",font=("Segoe UI",12),padx=5,pady=1,cursor="hand2")
+        self.overlay_close.bind("<ButtonRelease-1>",lambda e:self.hide_recording_overlay())
         self.overlay_close.pack(side="left")
         self.set_overlay_expanded(False)
         w.update_idletasks(); self.position_overlay(); self.update_overlay()
@@ -428,7 +431,9 @@ class App(tk.Tk):
             tk.Label(frame,text="◉",bg="#17191f",fg="#45b7e8",font=("Segoe UI",14,"bold")).pack(side="left",padx=(0,8))
             self.countdown_label=tk.Label(frame,text="",bg="#17191f",fg="white",font=("Segoe UI",10,"bold"))
             self.countdown_label.pack(side="left")
-            tk.Button(frame,text="Отмена",command=self.cancel_countdown,bg="#343842",fg="white",activebackground="#454a56",activeforeground="white",bd=0,padx=12,pady=4).pack(side="left",padx=(14,0))
+            cancel_lbl=tk.Label(frame,text="Отмена",bg="#343842",fg="white",font=("Segoe UI",9,"bold"),padx=12,pady=4,cursor="hand2")
+            cancel_lbl.bind("<ButtonRelease-1>",lambda e:self.cancel_countdown())
+            cancel_lbl.pack(side="left",padx=(14,0))
             w.update_idletasks()
             sw=w.winfo_screenwidth()
             x=max(10,sw-w.winfo_width()-18)
