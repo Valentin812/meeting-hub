@@ -28,22 +28,22 @@ jobs:
           [Setup]
           AppName=Meeting Hub
           AppVersion=1.0.0
-          DefaultDirName={localappdata}ProgramsMeeting Hub
+          DefaultDirName={localappdata}\Programs\Meeting Hub
           OutputDir=installer
           OutputBaseFilename=MeetingHubSetup
           PrivilegesRequired=lowest
           Uninstallable=yes
           [Files]
-          Source: "distMeetingHub*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+          Source: "dist\MeetingHub\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
           [Icons]
-          Name: "{autodesktop}Meeting Hub"; Filename: "{app}MeetingHub.exe"
-          Name: "{group}Meeting Hub"; Filename: "{app}MeetingHub.exe"
+          Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
+          Name: "{group}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
           [Run]
-          Filename: "{app}MeetingHub.exe"; Description: "Запустить Meeting Hub"; Flags: nowait postinstall skipifsilent
-          '@ | Set-Content installerMeetingHub.iss -Encoding UTF8
-          & $iscc.Source installerMeetingHub.iss
+          Filename: "{app}\MeetingHub.exe"; Description: "Launch Meeting Hub"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content installer\MeetingHub.iss -Encoding UTF8
+          & $iscc.Source installer\MeetingHub.iss
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: MeetingHub-Windows-Installer
-          path: installerMeetingHubSetup.exe
+          path: installer\MeetingHubSetup.exe
