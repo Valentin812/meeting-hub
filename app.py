@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.8"
+VERSION="1.1.9"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -104,9 +104,20 @@ def ai_analyze(transcript,project=""):
 class Recorder:
     def __init__(self,mic=None,speaker=None):
         self.mic=mic; self.speaker=speaker; self.rate=48000; self.run=False; self.m=[]; self.s=[]; self.muted=False
+        self.silence_started=None
+    def is_silent(self):
+        if not self.m or not self.s: return False
+        try:
+            m=np.concatenate(self.m[-4:])[:,0]
+            ss=np.concatenate(self.s[-4:])[:,0]
+            if len(m)==0 or len(ss)==0: return False
+            rms=max(float(np.sqrt(np.mean(m*m))),float(np.sqrt(np.mean(ss*ss))))
+            return rms < 0.003
+        except Exception: return False
     def set_mute(self,value): self.muted=value
     def start(self):
         self.run=True
+        self.silence_started=None
         mic=sc.get_microphone(self.mic,include_loopback=False) if self.mic else sc.default_microphone()
         sp=sc.get_speaker(self.speaker) if self.speaker else sc.default_speaker()
         loop=sc.get_microphone(id=str(sp.id),include_loopback=True)
@@ -231,8 +242,16 @@ class AutoDetector:
                     self.app.force_stop_lock=False
                 if self.app.auto_enabled and hit and not self.app.rec and not self.pending and not self.app.force_stop_lock:
                     self.pending=True; self.app.after(0,lambda h=hit:self._start(h))
-                elif not hit and self.app.rec and self.app.auto_mode and not self.app.processing:
-                    self.app.after(0,self.app.auto_stop)
+                elif self.app.rec and self.app.auto_mode and not self.app.processing:
+                    if not hit:
+                        self.app.after(0,self.app.auto_stop)
+                    elif self.app.rec.is_silent():
+                        if self.app.rec.silence_started is None:
+                            self.app.rec.silence_started=time.time()
+                        elif time.time()-self.app.rec.silence_started >= 90:
+                            self.app.after(0,self.app.auto_stop)
+                    else:
+                        self.app.rec.silence_started=None
             except Exception: pass
             time.sleep(2)
     def _start(self,hit):
