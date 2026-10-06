@@ -214,7 +214,7 @@ class AutoDetector:
                 hit=windows_meeting_title()
                 if not hit:
                     self.app.force_stop_lock=False
-                if hit and not self.app.rec and not self.pending and not self.app.force_stop_lock:
+                if self.app.auto_enabled and hit and not self.app.rec and not self.pending and not self.app.force_stop_lock:
                     self.pending=True; self.app.after(0,lambda h=hit:self._start(h))
                 elif not hit and self.app.rec and self.app.auto_mode and not self.app.processing:
                     self.app.after(0,self.app.auto_stop)
@@ -227,7 +227,7 @@ class AutoDetector:
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
-        self.rec=None; self.started=None; self.auto_mode=False; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
+        self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
     def build(self):
@@ -239,6 +239,7 @@ class App(tk.Tk):
     def setup_tray(self):
         menu=pystray.Menu(
             pystray.MenuItem(lambda item:self.tray_status(),lambda icon,item:False),
+            pystray.MenuItem(lambda item:"✓ Автоподключение включено" if self.auto_enabled else "○ Автоподключение выключено",self.toggle_auto),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lambda item:"■ Принудительно остановить запись",self.tray_stop,enabled=lambda item:self.rec is not None),
             pystray.MenuItem(lambda item:"🔇 Включить микрофон" if self.mic_muted else "🔇 Выключить микрофон",self.tray_mute,enabled=lambda item:self.rec is not None),
@@ -254,6 +255,14 @@ class App(tk.Tk):
             self.icon.run_detached()
         except Exception:
             threading.Thread(target=self.icon.run,daemon=True).start()
+    def toggle_auto(self,icon,item):
+        self.after(0,self.toggle_auto_enabled)
+    def toggle_auto_enabled(self):
+        self.auto_enabled=not self.auto_enabled
+        if not self.auto_enabled: self.auto_mode=False
+        self.refresh_tray()
+        self.status.set("Автоподключение: " + ("включено" if self.auto_enabled else "выключено"))
+        self.home()
     def tray_status(self):
         if self.rec: return ("🔴 Запись идёт" + (" • микрофон выключен" if self.mic_muted else ""))
         return "⚪ Ожидание встречи"
