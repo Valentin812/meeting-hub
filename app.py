@@ -120,11 +120,20 @@ class Recorder:
             except Exception: pass
         threading.Thread(target=rec,args=(mic,self.m,True),daemon=True).start()
         threading.Thread(target=rec,args=(loop,self.s,False),daemon=True).start()
-    def stop(self,path):
+    def stop(self,path,source_path=None):
         self.run=False; time.sleep(.6)
         if not self.m or not self.s: return None
-        m=np.concatenate(self.m); s=np.concatenate(self.s); n=min(len(m),len(s))
-        sf.write(str(path),np.column_stack((m[:n,0],s[:n,0])),self.rate,subtype="PCM_16"); return path
+        m=np.concatenate(self.m)[:,0]; s=np.concatenate(self.s)[:,0]; n=min(len(m),len(s))
+        m=m[:n].astype(np.float32); s=s[:n].astype(np.float32)
+        # Исходник сохраняем раздельно: L=микрофон, R=системный звук.
+        if source_path:
+            sf.write(str(source_path),np.column_stack((m,s)),self.rate,subtype="PCM_16")
+        # Для обычного прослушивания оба источника должны быть слышны в обоих ушах.
+        mix=(m+s)/2.0
+        peak=float(np.max(np.abs(mix))) if len(mix) else 0.0
+        if peak>0.98: mix=mix*(0.98/peak)
+        sf.write(str(path),np.column_stack((mix,mix)),self.rate,subtype="PCM_16")
+        return path
 
 MEETING_PROCS=("zoom.exe","ms-teams.exe","teams.exe","webex.exe","webexmta.exe","skype.exe")
 TITLE_KEYS=("zoom meeting","microsoft teams","google meet","webex","yandex telemost","яндекс телемост","телемост","meeting","встреч","созвон","звонок","конферен","conference")
@@ -193,9 +202,16 @@ class MeetingDetail(tk.Toplevel):
         ttk.Label(f,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w")
         tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
         row=ttk.Frame(f); row.pack(fill="x",pady=(8,0))
-        ttk.Button(row,text="▶ Открыть исходную запись",command=lambda:self.play(m["audio"])).pack(side="left")
+        ttk.Button(row,text="▶ Открыть запись",command=lambda:self.play(m["audio"])).pack(side="left")
+        ttk.Button(row,text="▶ Открыть исходник",command=lambda:self.play(self.source_path(m["audio"]))).pack(side="left",padx=8)
         ttk.Button(row,text="📁 Открыть папку с исходниками",command=lambda:open_recordings_folder()).pack(side="left",padx=8)
-        ttk.Label(f,text="Исходник: "+(m["audio"] or "не найден"),wraplength=820).pack(anchor="w",pady=(8,0))
+        src=self.source_path(m["audio"])
+        ttk.Label(f,text="Запись для прослушивания: "+(m["audio"] or "не найден")+"
+Исходник (L=микрофон, R=системный звук): "+src,wraplength=820).pack(anchor="w",pady=(8,0))
+    def source_path(self,path):
+        if not path: return ""
+        p=Path(path)
+        return str(p.with_name(p.stem+"_source.wav"))
     def play(self,path):
         if not path or not Path(path).exists(): messagebox.showerror("Запись","Файл записи не найден"); return
         try: os.startfile(path)
@@ -331,7 +347,8 @@ class App(tk.Tk):
         self.processing=True; p=RECORDINGS/(datetime.now().strftime("%Y%m%d_%H%M%S")+".wav"); r=self.rec; self.rec=None; self.auto_mode=False; self.mic_muted=False
         if hasattr(self,"rec_btn"): self.rec_btn.config(text="Обработка…",state="disabled")
         self.refresh_tray()
-        result=r.stop(p); self.last_recording=result
+        source_p=RECORDINGS/(p.stem+"_source.wav")
+        result=r.stop(p,source_p); self.last_recording=result
         self.pending_meeting_id=None
         if result:
             self.status.set("Запись сохранена: "+result.name)
@@ -352,7 +369,7 @@ class App(tk.Tk):
             try: self.icon.notify("Запись сохранена",result.name)
             except Exception: pass
         def work():
-            tr=transcribe_stereo(p) if result else ""
+            tr=transcribe_stereo(source_p) if result else ""
             data=ai_analyze(tr,self.project.get()) if result else {"points":[],"tasks":[],"ai_error":True,"error":"Запись не создана"}
             self.after(0,lambda:self.review(data,p,tr))
         threading.Thread(target=work,daemon=True).start()
