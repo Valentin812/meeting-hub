@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.11"
+VERSION="1.1.12"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -104,7 +104,7 @@ def ai_analyze(transcript,project=""):
 class Recorder:
     def __init__(self,mic=None,speaker=None):
         self.mic=mic; self.speaker=speaker; self.rate=48000; self.run=False; self.m=[]; self.s=[]; self.muted=False
-        self.silence_started=None
+        self.silence_started=None; self.level=0.0
     def is_silent(self):
         if not self.m or not self.s: return False
         try:
@@ -128,6 +128,10 @@ class Recorder:
                         block=r.record(int(self.rate*.25))
                         if is_mic and self.muted: block=np.zeros_like(block)
                         out.append(block)
+                        try:
+                            lv=float(np.sqrt(np.mean(block*block)))
+                            self.level=max(self.level*0.35,min(1.0,lv*8.0))
+                        except Exception: pass
             except Exception: pass
         threading.Thread(target=rec,args=(mic,self.m,True),daemon=True).start()
         threading.Thread(target=rec,args=(loop,self.s,False),daemon=True).start()
@@ -264,6 +268,7 @@ class App(tk.Tk):
         self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
         self.countdown_window=None; self.countdown_after=None; self.countdown_value=0; self.countdown_title=""
+        self.recording_overlay=None; self.overlay_after=None; self.overlay_hidden=False
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
