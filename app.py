@@ -206,8 +206,7 @@ class MeetingDetail(tk.Toplevel):
         ttk.Button(row,text="▶ Открыть исходник",command=lambda:self.play(self.source_path(m["audio"]))).pack(side="left",padx=8)
         ttk.Button(row,text="📁 Открыть папку с исходниками",command=lambda:open_recordings_folder()).pack(side="left",padx=8)
         src=self.source_path(m["audio"])
-        ttk.Label(f,text="Запись для прослушивания: "+(m["audio"] or "не найден")+"
-Исходник (L=микрофон, R=системный звук): "+src,wraplength=820).pack(anchor="w",pady=(8,0))
+        ttk.Label(f,text="Запись для прослушивания: "+(m["audio"] or "не найден")+"\\nИсходник (L=микрофон, R=системный звук): "+src,wraplength=820).pack(anchor="w",pady=(8,0))
     def source_path(self,path):
         if not path: return ""
         p=Path(path)
