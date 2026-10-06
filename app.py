@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.2"
+VERSION="1.1.3"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -79,10 +79,23 @@ def ai_analyze(transcript,project=""):
     if not exe:
         return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Локальный AI не найден. Запустите установщик Meeting Hub ещё раз или дождитесь установки локального AI."}
     try:
-        r=subprocess.run([exe,"run",OLLAMA,prompt],capture_output=True,text=True,timeout=300)
+        r=subprocess.run([exe,"run",OLLAMA,prompt,"--format","json"],capture_output=True,text=True,timeout=300)
         s=r.stdout.strip(); a=s.find("{"); b=s.rfind("}")
         if a>=0 and b>a:
-            d=json.loads(s[a:b+1]); d.setdefault("points",[]); d.setdefault("tasks",[]); return d
+            raw=s[a:b+1]
+            # Модели иногда возвращают реальные переводы строк/табуляции внутри JSON-строк.
+            # Нормализуем только управляющие символы внутри кавычек, не ломая структуру JSON.
+            fixed=[]; quoted=False; escaped=False
+            for ch in raw:
+                if escaped:
+                    fixed.append(ch); escaped=False; continue
+                if ch=="\\": fixed.append(ch); escaped=True; continue
+                if ch=='"': fixed.append(ch); quoted=not quoted; continue
+                if quoted and ord(ch)<32:
+                    fixed.append("\\n" if ch=="\\n" else ("\\t" if ch=="\\t" else " "))
+                else:
+                    fixed.append(ch)
+            d=json.loads("".join(fixed)); d.setdefault("points",[]); d.setdefault("tasks",[]); return d
         if r.returncode!=0: raise RuntimeError(r.stderr.strip() or "Ollama завершил работу с ошибкой")
         return {"title":"","project":project,"points":[s[:3000]],"tasks":[]}
     except Exception as e:
