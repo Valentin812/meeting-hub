@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.10"
+VERSION="1.1.11"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -263,6 +263,7 @@ class App(tk.Tk):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
         self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
+        self.countdown_window=None; self.countdown_after=None; self.countdown_value=0; self.countdown_title=""
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
@@ -342,7 +343,66 @@ class App(tk.Tk):
             if hasattr(self,"rec_btn"): self.rec_btn.config(text="■ ОСТАНОВИТЬ")
             self.refresh_tray()
         except Exception as e: self.rec=None; messagebox.showerror("Аудио",str(e))
-    def auto_start(self,title): self.after(0,lambda:self.start_recording(title,True))
+    def auto_start(self,title):
+        self.after(0,lambda:self.start_countdown(title))
+    def start_countdown(self,title):
+        if self.rec or self.processing or self.countdown_window is not None: return
+        self.countdown_title=title or "Встреча"
+        self.countdown_value=5
+        self.pending=False
+        try:
+            w=tk.Toplevel(self)
+            self.countdown_window=w
+            w.overrideredirect(True)
+            w.attributes("-topmost",True)
+            w.configure(bg="#17191f")
+            frame=tk.Frame(w,bg="#17191f",padx=14,pady=9)
+            frame.pack()
+            tk.Label(frame,text="◉",bg="#17191f",fg="#45b7e8",font=("Segoe UI",14,"bold")).pack(side="left",padx=(0,8))
+            self.countdown_label=tk.Label(frame,text="",bg="#17191f",fg="white",font=("Segoe UI",10,"bold"))
+            self.countdown_label.pack(side="left")
+            tk.Button(frame,text="Отмена",command=self.cancel_countdown,bg="#343842",fg="white",activebackground="#454a56",activeforeground="white",bd=0,padx=12,pady=4).pack(side="left",padx=(14,0))
+            w.update_idletasks()
+            sw=w.winfo_screenwidth()
+            x=max(10,sw-w.winfo_width()-18)
+            w.geometry(f"+{x}+18")
+            self._countdown_tick()
+        except Exception:
+            self.countdown_window=None
+            self.start_recording(title,True)
+
+    def _countdown_tick(self):
+        w=self.countdown_window
+        if w is None: return
+        if not windows_meeting_title():
+            self._close_countdown()
+            self.force_stop_lock=False
+            self.status.set("Встреча не обнаружена")
+            return
+        self.countdown_label.config(text=f"{self.countdown_title} — запись через {self.countdown_value}")
+        if self.countdown_value<=1:
+            self._close_countdown()
+            self.start_recording(self.countdown_title,True)
+            return
+        self.countdown_value-=1
+        self.countdown_after=self.after(1000,self._countdown_tick)
+
+    def cancel_countdown(self):
+        self._close_countdown()
+        self.force_stop_lock=True
+        self.status.set("Запись отменена")
+        self.refresh_tray()
+
+    def _close_countdown(self):
+        if self.countdown_after:
+            try: self.after_cancel(self.countdown_after)
+            except Exception: pass
+        self.countdown_after=None
+        if self.countdown_window:
+            try: self.countdown_window.destroy()
+            except Exception: pass
+        self.countdown_window=None
+
     def toggle(self):
         if not self.rec: self.start_recording()
         else: self.stop_recording()
