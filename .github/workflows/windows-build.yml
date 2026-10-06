@@ -1,0 +1,44 @@
+name: Meeting Hub Windows Build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Build EXE
+        run: pyinstaller --noconfirm --clean --windowed --name MeetingHub --collect-all faster_whisper --collect-all ctranslate2 app.py
+      - name: Create installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
+          @'
+          [Setup]
+          AppName=Meeting Hub
+          AppVersion=1.0.0
+          DefaultDirName={localappdata}\Programs\Meeting Hub
+          OutputDir=installer
+          OutputBaseFilename=MeetingHubSetup
+          PrivilegesRequired=lowest
+          Uninstallable=yes
+          [Files]
+          Source: "dist\MeetingHub\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+          [Icons]
+          Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
+          Name: "{group}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
+          [Run]
+          Filename: "{app}\MeetingHub.exe"; Description: "Запустить Meeting Hub"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content installer\MeetingHub.iss -Encoding UTF8
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\MeetingHub.iss
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeetingHub-Windows-Installer
+          path: installer\MeetingHubSetup.exe
