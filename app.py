@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.22"
+VERSION="1.1.23"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -89,40 +89,53 @@ def ai_analyze(transcript,project=""):
 {transcript[:30000]}"""
     exe=find_ollama()
     if not exe:
-        return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Локальный AI не найден. Запустите установщик Meeting Hub ещё раз или дождитесь установки локального AI."}
-    try:
-        # Ollama — консольное Windows-приложение. Не показываем его окно пользователю.
-        si=None; flags=0
-        if os.name=="nt":
-            si=subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 0
-            flags=subprocess.CREATE_NO_WINDOW
-        r=subprocess.run(
-            [exe,"run",OLLAMA,prompt,"--format","json"],
-            capture_output=True,text=True,encoding="utf-8",errors="replace",
-            timeout=300,stdin=subprocess.DEVNULL,startupinfo=si,creationflags=flags
+        return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Локальный AI не найден."}
+    si=None; flags=0
+    if os.name=="nt":
+        si=subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=0
+        flags=subprocess.CREATE_NO_WINDOW
+
+    def run_ai(text_prompt):
+        return subprocess.run(
+            [exe,"run",OLLAMA,"--format","json"],
+            input=text_prompt,capture_output=True,text=True,encoding="utf-8",errors="replace",
+            timeout=300,stdin=subprocess.PIPE,startupinfo=si,creationflags=flags
         )
-        s=r.stdout.strip(); a=s.find("{"); b=s.rfind("}")
-        if a>=0 and b>a:
-            raw=s[a:b+1]
-            # Модели иногда возвращают реальные переводы строк/табуляции внутри JSON-строк.
-            # Нормализуем только управляющие символы внутри кавычек, не ломая структуру JSON.
-            fixed=[]; quoted=False; escaped=False
-            for ch in raw:
-                if escaped:
-                    fixed.append(ch); escaped=False; continue
-                if ch=="\\": fixed.append(ch); escaped=True; continue
-                if ch=='"': fixed.append(ch); quoted=not quoted; continue
-                if quoted and ord(ch)<32:
-                    fixed.append("\\n" if ch=="\\n" else ("\\t" if ch=="\\t" else " "))
-                else:
-                    fixed.append(ch)
-            d=json.loads("".join(fixed)); d.setdefault("points",[]); d.setdefault("tasks",[]); return d
-        if r.returncode!=0: raise RuntimeError(r.stderr.strip() or "Ollama завершил работу с ошибкой")
-        return {"title":"","project":project,"points":[s[:3000]],"tasks":[]}
+
+    def parse_json(raw):
+        raw=(raw or "").strip(); a=raw.find("{"); b=raw.rfind("}")
+        if a<0 or b<=a: return None
+        raw=raw[a:b+1]
+        fixed=[]; quoted=False; escaped=False
+        for ch in raw:
+            if escaped: fixed.append(ch); escaped=False; continue
+            if ch=="\\": fixed.append(ch); escaped=True; continue
+            if ch=='"': fixed.append(ch); quoted=not quoted; continue
+            if quoted and ord(ch)<32: fixed.append("\\n" if ch=="\n" else ("\\t" if ch=="\t" else " "))
+            else: fixed.append(ch)
+        d=json.loads("".join(fixed))
+        if not isinstance(d,dict): return None
+        points=d.get("points",[])
+        tasks=d.get("tasks",[])
+        if not isinstance(points,list): points=[str(points)]
+        if not isinstance(tasks,list): tasks=[]
+        return {"title":d.get("title",""),"project":d.get("project",project),"points":[str(x) for x in points if clean(x)],"tasks":tasks}
+
+    try:
+        r=run_ai(prompt)
+        d=parse_json(r.stdout)
+        if d: return d
+        retry=f"""Верни только корректный JSON, без markdown и пояснений.
+Формат: {{"title":"","project":"","points":["тезис"],"tasks":[{{"task":"","owner":"","deadline":""}}]}}
+Сделай 3-7 коротких тезисов. Задачи — только явно поставленные на встрече. Если задач нет, tasks=[].
+Текст встречи:
+{transcript[:20000]}"""
+        r2=run_ai(retry); d=parse_json(r2.stdout)
+        if d: return d
+        raise RuntimeError((r2.stderr or r.stderr or "Ollama не вернул JSON").strip())
     except Exception as e:
         return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Ошибка локального AI: "+str(e)}
+
 
 class Recorder:
     def __init__(self,mic=None,speaker=None):
@@ -613,11 +626,18 @@ class App(tk.Tk):
         self.meetings()
 
     def finish_transcription_success(self,mid,tr):
+        threading.Thread(target=self.process_ai_background,args=(mid,tr),daemon=True).start()
+        self.status.set("Расшифровка готова. Формирую тезисы и задачи…")
+    def process_ai_background(self,mid,tr):
         data=ai_analyze(tr,self.project.get())
+        self.after(0,lambda d=data:self.finish_ai(mid,tr,d))
+    def finish_ai(self,mid,tr,data):
         if data.get("ai_error"):
             self.processing=False; self.pending_meeting_id=mid; self.refresh_tray()
             if hasattr(self,"rec_btn"): self.rec_btn.config(text="● НАЧАТЬ ЗАПИСЬ",state="normal")
-            self.status.set("Расшифровка готова. Локальный AI пока недоступен."); self.meetings(); return
+            self.status.set("Расшифровка готова. AI-анализ не выполнен. Можно повторить.")
+            self.meetings(); return
+        self.processing=False
         self.review(data,self.last_recording,tr)
 
     def save_meeting(self,d,path,tr):
