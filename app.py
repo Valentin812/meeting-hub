@@ -297,50 +297,97 @@ class MeetingDetail(tk.Frame):
     def __init__(self,parent,m,on_back=None):
         super().__init__(parent,bg="#101218")
         self.on_back=on_back
+        self.app=parent.winfo_toplevel()
+        self.meeting_id=m["id"]
+        self.audio_path=m["audio"] or ""
+
+        # Верхняя шапка и нижняя панель действий фиксированы.
         f=ttk.Frame(self,padding=18); f.pack(fill="both",expand=True)
-        ttk.Button(f,text="← К встречам",command=self.go_back).pack(anchor="w",pady=(0,8))
-        ttk.Label(f,text=m["title"] or "Без названия",font=("Segoe UI",18,"bold")).pack(anchor="w")
-        ttk.Label(f,text=f"{m['started'][:16]}   •   {m['project'] or 'Без проекта'}").pack(anchor="w",pady=(2,12))
-        ttk.Label(f,text="Тезисы",font=("Segoe UI",10,"bold")).pack(anchor="w")
-        t=tk.Text(f,height=8); t.pack(fill="x",pady=(2,10)); val=m["points"] or ""
+        header=ttk.Frame(f); header.pack(fill="x",side="top")
+        ttk.Button(header,text="← К встречам",command=self.go_back).pack(anchor="w",pady=(0,8))
+        ttk.Label(header,text=m["title"] or "Без названия",font=("Segoe UI",18,"bold")).pack(anchor="w")
+        ttk.Label(header,text=f"{m['started'][:16]}   •   {m['project'] or 'Без проекта'}").pack(anchor="w",pady=(2,10))
+
+        footer=ttk.Frame(f); footer.pack(fill="x",side="bottom",pady=(8,0))
+        ttk.Separator(f,orient="horizontal").pack(fill="x",side="bottom",before=footer)
+        ttk.Label(footer,text="Запись",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(7,2))
+        player=ttk.Frame(footer); player.pack(fill="x",pady=(0,7))
+        self.audio_player=AudioPlayer(player,self.audio_path); self.audio_player.pack(fill="x")
+        actions=ttk.Frame(footer); actions.pack(fill="x")
+        ttk.Button(actions,text="📁 Открыть папку",command=lambda:open_recordings_folder()).pack(side="left")
+        self.retry_btn=ttk.Button(actions,text="↻ Повторить транскрибацию",command=self.retry_transcription)
+        if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
+            self.retry_btn.pack(side="left",padx=(8,0))
+        ttk.Button(actions,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
+
+        # Скроллится только содержимое встречи, а не вся страница.
+        content=ttk.Frame(f)
+        content.pack(fill="both",expand=True,side="top")
+        canvas=tk.Canvas(content,bg="#101218",highlightthickness=0,bd=0)
+        scrollbar=ttk.Scrollbar(content,orient="vertical",command=canvas.yview)
+        inner=ttk.Frame(canvas)
+        inner_window=canvas.create_window((0,0),window=inner,anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left",fill="both",expand=True)
+        scrollbar.pack(side="right",fill="y")
+        def on_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(inner_window,width=canvas.winfo_width())
+        inner.bind("<Configure>",on_configure)
+        canvas.bind("<Configure>",lambda e:canvas.itemconfigure(inner_window,width=e.width))
+
+        ttk.Label(inner,text="Тезисы",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(0,2))
+        t=tk.Text(inner,height=6,wrap="word")
+        t.pack(fill="x",pady=(0,10))
+        val=m["points"] or ""
         try: val="\n".join(json.loads(val))
         except Exception: pass
         t.insert("1.0",val); t.config(state="disabled")
-        ttk.Label(f,text="Задачи",font=("Segoe UI",10,"bold")).pack(anchor="w")
-        q=tk.Text(f,height=7); q.pack(fill="x",pady=(2,10))
+
+        ttk.Label(inner,text="Задачи",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(0,2))
+        q=tk.Text(inner,height=5,wrap="word")
+        q.pack(fill="x",pady=(0,10))
         c=db(); tasks=c.execute("select * from tasks where meeting_id=? order by id",(m["id"],)).fetchall(); c.close()
-        q.insert("1.0","\n".join(f"{x['task']} | {x['owner'] or ''} | {x['deadline'] or ''}" for x in tasks)); q.config(state="disabled")
-        ttk.Label(f,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w")
-        tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
-        self.transcribe_action=ttk.Label(f,text="",foreground="#666")
-        self.transcribe_action.pack(anchor="w",pady=(0,4))
-        self.transcribe_progress=ttk.Progressbar(f,mode="indeterminate")
+        q.insert("1.0","\n".join(f"{x['task']} | {x['owner'] or ''} | {x['deadline'] or ''}" for x in tasks))
+        q.config(state="disabled")
+
+        ttk.Label(inner,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(0,2))
+        tr=tk.Text(inner,height=18,wrap="word")
+        tr.pack(fill="both",expand=True)
+        tr.insert("1.0",m["transcript"] or "")
+        tr.config(state="disabled")
+
+        self.transcribe_action=ttk.Label(inner,text="",foreground="#666")
+        self.transcribe_action.pack(anchor="w",pady=(5,2))
+        self.transcribe_progress=ttk.Progressbar(inner,mode="indeterminate")
         if m["status"]=="transcribing":
-            self.transcribe_action.config(text="⏳ Расшифровка выполняется. Подождите несколько минут…")
-            self.transcribe_progress.pack(anchor="w",fill="x",pady=(0,6)); self.transcribe_progress.start(12)
-        if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
-            self.retry_btn=ttk.Button(f,text="↻ Повторить транскрибацию",command=lambda:self.retry_transcription(m["id"],m["audio"]))
-            self.retry_btn.pack(anchor="w",pady=(2,6))
-        else:
-            self.retry_btn=None
-        ttk.Label(f,text="Запись",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(4,2))
-        player=ttk.Frame(f); player.pack(fill="x",pady=(0,8))
-        self.audio_player=AudioPlayer(player,m["audio"]); self.audio_player.pack(fill="x")
-        row=ttk.Frame(f); row.pack(fill="x",pady=(2,0))
-        ttk.Button(row,text="📁 Открыть папку",command=lambda:open_recordings_folder()).pack(side="left")
-        ttk.Button(row,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
+            self.show_transcription_progress()
+        elif m["status"]=="transcription_error":
+            self.transcribe_action.config(text="⚠ Транскрибация не завершилась. Можно запустить повторно.")
+
+    def show_transcription_progress(self):
+        self.transcribe_action.config(text="⏳ Идёт транскрибация. Можно продолжать пользоваться программой.")
+        if not self.transcribe_progress.winfo_ismapped():
+            self.transcribe_progress.pack(anchor="w",fill="x",pady=(0,6))
+        self.transcribe_progress.start(12)
+        if hasattr(self,"retry_btn"):
+            self.retry_btn.config(text="⏳ Идёт транскрибация…",state="disabled")
+
     def go_back(self):
         if self.on_back: self.on_back()
+
     def source_path(self,path):
         if not path: return ""
         p=Path(path)
         return str(p.with_name(p.stem+"_source.wav"))
+
     def track_path(self,path,kind):
         if not path: return ""
         p=Path(path)
         return str(p.with_name(p.stem+"_"+kind+".wav"))
+
     def delete_meeting(self,meeting_id):
-        if not messagebox.askyesno("Удалить встречу","Удалить встречу, расшифровку, задачи и все связанные аудиофайлы?\\n\\nЭто действие нельзя отменить."):
+        if not messagebox.askyesno("Удалить встречу","Удалить встречу, расшифровку, задачи и все связанные аудиофайлы?\n\nЭто действие нельзя отменить."):
             return
         try:
             c=db()
@@ -362,8 +409,10 @@ class MeetingDetail(tk.Frame):
         except Exception as e:
             try: c.rollback(); c.close()
             except Exception: pass
-            messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\\n"+str(e))
-    def retry_transcription(self,meeting_id,audio):
+            messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\n"+str(e))
+
+    def retry_transcription(self):
+        audio=self.audio_path
         if not audio or not Path(audio).exists():
             messagebox.showerror("Транскрибация","Файл записи не найден.")
             return
@@ -371,22 +420,18 @@ class MeetingDetail(tk.Frame):
         if not Path(source).exists():
             source=audio
         c=db()
-        c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",meeting_id)); c.commit(); c.close()
-        self.pending_meeting_id=meeting_id
-        self.status.set("Расшифровка выполняется в фоне…")
-        if hasattr(self,"retry_btn") and self.retry_btn:
-            self.retry_btn.config(text="⏳ Идёт транскрибация…",state="disabled")
-        if hasattr(self,"transcribe_action"):
-            self.transcribe_action.config(text="⏳ Идёт транскрибация. Можно продолжать пользоваться программой.")
-        if hasattr(self,"transcribe_progress"):
-            self.transcribe_progress.pack(anchor="w",fill="x",pady=(0,6))
-            self.transcribe_progress.start(12)
-        self.update_idletasks()
-        threading.Thread(target=self.process_meeting_background,args=(meeting_id,audio,source),daemon=True).start()
-    def play(self,path):
-        if not path or not Path(path).exists(): messagebox.showerror("Запись","Файл записи не найден"); return
-        try: os.startfile(path)
-        except Exception as e: messagebox.showerror("Запись",str(e))
+        c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",self.meeting_id))
+        c.commit(); c.close()
+        self.app.pending_meeting_id=self.meeting_id
+        self.app.last_recording=Path(audio)
+        self.app.processing=True
+        self.app.status.set("Расшифровка выполняется в фоне…")
+        self.show_transcription_progress()
+        threading.Thread(
+            target=self.app.process_meeting_background,
+            args=(self.meeting_id,Path(audio),Path(source)),
+            daemon=True
+        ).start()
 
 def open_recordings_folder():
     RECORDINGS.mkdir(exist_ok=True)
