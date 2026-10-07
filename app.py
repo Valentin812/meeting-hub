@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.18"
+VERSION="1.1.19"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -143,6 +143,9 @@ class Recorder:
         # Исходник сохраняем раздельно: L=микрофон, R=системный звук.
         if source_path:
             sf.write(str(source_path),np.column_stack((m,s)),self.rate,subtype="PCM_16")
+            sp=Path(source_path)
+            sf.write(str(sp.with_name(sp.stem.replace("_source","_mic")+".wav")),m,self.rate,subtype="PCM_16")
+            sf.write(str(sp.with_name(sp.stem.replace("_source","_system")+".wav")),s,self.rate,subtype="PCM_16")
         # Для обычного прослушивания оба источника должны быть слышны в обоих ушах.
         mix=(m+s)/2.0
         peak=float(np.max(np.abs(mix))) if len(mix) else 0.0
@@ -221,16 +224,47 @@ class MeetingDetail(tk.Frame):
         tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
         row=ttk.Frame(f); row.pack(fill="x",pady=(8,0))
         ttk.Button(row,text="▶ Открыть запись",command=lambda:self.play(m["audio"])).pack(side="left")
-        ttk.Button(row,text="▶ Открыть исходник",command=lambda:self.play(self.source_path(m["audio"]))).pack(side="left",padx=8)
-        ttk.Button(row,text="📁 Открыть папку с исходниками",command=lambda:open_recordings_folder()).pack(side="left",padx=8)
-        src=self.source_path(m["audio"])
-        ttk.Label(f,text="Запись для прослушивания: "+(m["audio"] or "не найден")+"\\nИсходник (L=микрофон, R=системный звук): "+src,wraplength=820).pack(anchor="w",pady=(8,0))
+        ttk.Button(row,text="🎤 Микрофон",command=lambda:self.play(self.track_path(m["audio"],"mic"))).pack(side="left",padx=6)
+        ttk.Button(row,text="🔊 Системный звук",command=lambda:self.play(self.track_path(m["audio"],"system"))).pack(side="left",padx=6)
+        ttk.Button(row,text="🎚 Исходник L/R",command=lambda:self.play(self.source_path(m["audio"]))).pack(side="left",padx=6)
+        ttk.Button(row,text="📁 Папка",command=lambda:open_recordings_folder()).pack(side="left",padx=6)
+        ttk.Button(row,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
+        src=self.source_path(m["audio"]); mic=self.track_path(m["audio"],"mic"); system=self.track_path(m["audio"],"system")
+        ttk.Label(f,text="Запись: смешанный звук (оба источника в обоих каналах)\\nМикрофон: "+mic+"\\nСистемный звук: "+system+"\\nИсходник L/R: "+src,wraplength=820).pack(anchor="w",pady=(8,0))
     def go_back(self):
         if self.on_back: self.on_back()
     def source_path(self,path):
         if not path: return ""
         p=Path(path)
         return str(p.with_name(p.stem+"_source.wav"))
+    def track_path(self,path,kind):
+        if not path: return ""
+        p=Path(path)
+        return str(p.with_name(p.stem+"_"+kind+".wav"))
+    def delete_meeting(self,meeting_id):
+        if not messagebox.askyesno("Удалить встречу","Удалить встречу, расшифровку, задачи и все связанные аудиофайлы?\\n\\nЭто действие нельзя отменить."):
+            return
+        try:
+            c=db()
+            row=c.execute("select audio from meetings where id=?",(meeting_id,)).fetchone()
+            if row:
+                audio=row["audio"]
+                paths=[audio,self.source_path(audio),self.track_path(audio,"mic"),self.track_path(audio,"system")]
+                c.execute("delete from tasks where meeting_id=?",(meeting_id,))
+                c.execute("delete from meetings where id=?",(meeting_id,))
+                c.commit()
+                c.close()
+                for path in paths:
+                    if path:
+                        try: Path(path).unlink(missing_ok=True)
+                        except Exception: pass
+            else:
+                c.close()
+            self.go_back()
+        except Exception as e:
+            try: c.rollback(); c.close()
+            except Exception: pass
+            messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\\n"+str(e))
     def play(self,path):
         if not path or not Path(path).exists(): messagebox.showerror("Запись","Файл записи не найден"); return
         try: os.startfile(path)
