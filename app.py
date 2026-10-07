@@ -436,7 +436,8 @@ class App(tk.Tk):
         for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks),("📥 Загрузить запись",self.import_recording),("Проверить обновления",self.check_updates_now)]:
             tk.Button(left,text=name,command=cmd,anchor="w",bg="#151820",fg="#b0b7c5",bd=0,padx=20,pady=10).pack(fill="x")
         self.home()
-        threading.Thread(target=self.check_updates_background,daemon=True).start()    def check_updates_background(self):
+        threading.Thread(target=self.check_updates_background,daemon=True).start()
+    def check_updates_background(self):
         try:
             url="https://raw.githubusercontent.com/Valentin812/meeting-hub/main/app.py"
             req=urllib.request.Request(url,headers={"User-Agent":"MeetingHub"})
