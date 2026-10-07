@@ -2,7 +2,7 @@ import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import numpy as np
 import soundcard as sc
 import soundfile as sf
@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.24"
+VERSION="1.1.25"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -314,6 +314,10 @@ class MeetingDetail(tk.Frame):
         tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
         self.transcribe_action=ttk.Label(f,text="",foreground="#666")
         self.transcribe_action.pack(anchor="w",pady=(0,4))
+        self.transcribe_progress=ttk.Progressbar(f,mode="indeterminate")
+        if m["status"]=="transcribing":
+            self.transcribe_action.config(text="⏳ Расшифровка выполняется. Подождите несколько минут…")
+            self.transcribe_progress.pack(anchor="w",fill="x",pady=(0,6)); self.transcribe_progress.start(12)
         if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
             self.retry_btn=ttk.Button(f,text="↻ Повторить транскрибацию",command=lambda:self.retry_transcription(m["id"],m["audio"]))
             self.retry_btn.pack(anchor="w",pady=(2,6))
@@ -370,6 +374,14 @@ class MeetingDetail(tk.Frame):
         c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",meeting_id)); c.commit(); c.close()
         self.pending_meeting_id=meeting_id
         self.status.set("Расшифровка выполняется в фоне…")
+        if hasattr(self,"retry_btn") and self.retry_btn:
+            self.retry_btn.config(text="⏳ Идёт транскрибация…",state="disabled")
+        if hasattr(self,"transcribe_action"):
+            self.transcribe_action.config(text="⏳ Идёт транскрибация. Можно продолжать пользоваться программой.")
+        if hasattr(self,"transcribe_progress"):
+            self.transcribe_progress.pack(anchor="w",fill="x",pady=(0,6))
+            self.transcribe_progress.start(12)
+        self.update_idletasks()
         threading.Thread(target=self.process_meeting_background,args=(meeting_id,audio,source),daemon=True).start()
     def play(self,path):
         if not path or not Path(path).exists(): messagebox.showerror("Запись","Файл записи не найден"); return
@@ -418,9 +430,72 @@ class App(tk.Tk):
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
         tk.Label(left,text="MEETING",bg="#151820",fg="white",font=("Segoe UI",11,"bold")).pack(pady=(25,0)); tk.Label(left,text="HUB",bg="#151820",fg="#7c8cff",font=("Segoe UI",20,"bold")).pack(pady=(0,2))
-        tk.Label(left,text="v"+VERSION,bg="#151820",fg="#6f7787",font=("Segoe UI",9)).pack(pady=(0,25))
-        for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks)]: tk.Button(left,text=name,command=cmd,anchor="w",bg="#151820",fg="#b0b7c5",bd=0,padx=20,pady=10).pack(fill="x")
+        tk.Label(left,text="v"+VERSION,bg="#151820",fg="#6f7787",font=("Segoe UI",9)).pack(pady=(0,12))
+        self.update_label=tk.Label(left,text="",bg="#151820",fg="#6fe0a1",font=("Segoe UI",9),cursor="hand2",wraplength=160,justify="left")
+        self.update_label.pack(fill="x",padx=18,pady=(0,8))
+        for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks),("📥 Загрузить запись",self.import_recording),("Проверить обновления",self.check_updates_now)]:
+            tk.Button(left,text=name,command=cmd,anchor="w",bg="#151820",fg="#b0b7c5",bd=0,padx=20,pady=10).pack(fill="x")
         self.home()
+        threading.Thread(target=self.check_updates_background,daemon=True).start()    def check_updates_background(self):
+        try:
+            url="https://raw.githubusercontent.com/Valentin812/meeting-hub/main/app.py"
+            req=urllib.request.Request(url,headers={"User-Agent":"MeetingHub"})
+            remote=urllib.request.urlopen(req,timeout=5).read().decode("utf-8","ignore")
+            m=re.search(r'VERSION="([^"]+)"',remote)
+            if m and self.version_tuple(m.group(1))>self.version_tuple(VERSION):
+                rv=m.group(1)
+                self.after(0,lambda:self.show_update_notice(rv))
+        except Exception:
+            pass
+    def version_tuple(self,v):
+        try: return tuple(int(x) for x in v.split("."))
+        except: return (0,)
+    def show_update_notice(self,remote):
+        if not hasattr(self,"update_label"): return
+        self.update_label.config(text=f"🟢 Доступна новая версия {remote}\nНажмите для проверки",fg="#6fe0a1")
+        self.update_label.bind("<Button-1>",lambda e:self.check_updates_now())
+    def check_updates_now(self):
+        self.update_label.config(text="Проверяю обновления…",fg="#c7ccd6")
+        threading.Thread(target=self._check_updates_now,daemon=True).start()
+    def _check_updates_now(self):
+        try:
+            url="https://raw.githubusercontent.com/Valentin812/meeting-hub/main/app.py"
+            req=urllib.request.Request(url,headers={"User-Agent":"MeetingHub"})
+            remote=urllib.request.urlopen(req,timeout=5).read().decode("utf-8","ignore")
+            m=re.search(r'VERSION="([^"]+)"',remote)
+            rv=m.group(1) if m else VERSION
+            if self.version_tuple(rv)>self.version_tuple(VERSION):
+                self.after(0,lambda:self.show_update_notice(rv))
+                self.after(0,lambda:messagebox.showinfo("Обновление Meeting Hub",f"Доступна новая версия {rv}.\n\nПока обновление нужно установить новым установщиком."))
+            else:
+                self.after(0,lambda:self.update_label.config(text="✓ У вас последняя версия",fg="#7f8898"))
+        except Exception:
+            self.after(0,lambda:self.update_label.config(text="Не удалось проверить обновления",fg="#d78b8b"))
+    def import_recording(self):
+        path=filedialog.askopenfilename(title="Выберите запись встречи",filetypes=[
+            ("Аудио/видео","*.wav *.mp3 *.m4a *.flac *.ogg *.mp4 *.webm"),
+            ("Все файлы","*.*")])
+        if not path: return
+        src=Path(path)
+        if not src.exists(): return
+        try:
+            stamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+            dst=RECORDINGS/f"{stamp}_{src.name}"
+            shutil.copy2(src,dst)
+            now=datetime.now().isoformat(timespec="seconds")
+            title=src.stem[:120] or "Импортированная встреча"
+            c=db()
+            c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",
+                      (title,"",now,str(dst),"","","","",json.dumps([],ensure_ascii=False),"transcribing"))
+            mid=c.execute("select last_insert_rowid()").fetchone()[0]
+            c.commit(); c.close()
+            self.status.set("Запись загружена. Расшифровка выполняется…")
+            self.meetings()
+            threading.Thread(target=self.process_meeting_background,args=(mid,str(dst),str(dst)),daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("Загрузка записи","Не удалось загрузить запись:\n"+str(e))
+
+
     def setup_tray(self):
         menu=pystray.Menu(
             pystray.MenuItem(lambda item:self.tray_status(),lambda icon,item:False),
