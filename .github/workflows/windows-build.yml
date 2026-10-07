@@ -35,6 +35,7 @@ jobs:
           Uninstallable=yes
           [Files]
           Source: "..\dist\MeetingHub\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+          Source: "..\bootstrap_ai.ps1"; DestDir: "{app}"; Flags: ignoreversion
           [Code]
           function PrepareToInstall(var NeedsRestart: Boolean): String;
           var
@@ -44,7 +45,6 @@ jobs:
             Exec(ExpandConstant('{cmd}'), '/C taskkill /IM MeetingHub.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
             Sleep(1000);
           end;
-          Source: "..\bootstrap_ai.ps1"; DestDir: "{app}"; Flags: ignoreversion
           [Icons]
           Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
           Name: "{group}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
