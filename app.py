@@ -1,4 +1,4 @@
-import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time
+import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time, shutil
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
