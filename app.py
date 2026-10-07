@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.14"
+VERSION="1.1.15"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -200,10 +200,12 @@ class Review(tk.Toplevel):
             if p and p[0]: d["tasks"].append({"task":p[0],"owner":p[1] if len(p)>1 else "","deadline":p[2] if len(p)>2 else ""})
         self.save(d); self.destroy()
 
-class MeetingDetail(tk.Toplevel):
-    def __init__(self,parent,m):
-        super().__init__(parent); self.title("Встреча — "+(m["title"] or "Без названия")); self.geometry("900x700")
+class MeetingDetail(tk.Frame):
+    def __init__(self,parent,m,on_back=None):
+        super().__init__(parent,bg="#101218")
+        self.on_back=on_back
         f=ttk.Frame(self,padding=18); f.pack(fill="both",expand=True)
+        ttk.Button(f,text="← К встречам",command=self.go_back).pack(anchor="w",pady=(0,8))
         ttk.Label(f,text=m["title"] or "Без названия",font=("Segoe UI",18,"bold")).pack(anchor="w")
         ttk.Label(f,text=f"{m['started'][:16]}   •   {m['project'] or 'Без проекта'}").pack(anchor="w",pady=(2,12))
         ttk.Label(f,text="Тезисы",font=("Segoe UI",10,"bold")).pack(anchor="w")
@@ -223,6 +225,8 @@ class MeetingDetail(tk.Toplevel):
         ttk.Button(row,text="📁 Открыть папку с исходниками",command=lambda:open_recordings_folder()).pack(side="left",padx=8)
         src=self.source_path(m["audio"])
         ttk.Label(f,text="Запись для прослушивания: "+(m["audio"] or "не найден")+"\\nИсходник (L=микрофон, R=системный звук): "+src,wraplength=820).pack(anchor="w",pady=(8,0))
+    def go_back(self):
+        if self.on_back: self.on_back()
     def source_path(self,path):
         if not path: return ""
         p=Path(path)
@@ -553,7 +557,11 @@ class App(tk.Tk):
         self.clear(); tk.Label(self.main,text="Встречи",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w",padx=30,pady=25)
         c=db(); rows=c.execute("select * from meetings order by id desc limit 50").fetchall(); c.close()
         for m in rows:
-            tk.Button(self.main,text=f"{m['started'][:16]}  •  {m['title']}  •  {m['project'] or 'Без проекта'}",command=lambda x=m:MeetingDetail(self,x),bg="#1b202a",fg="white",anchor="w",padx=15,pady=9,bd=0,activebackground="#252b38",activeforeground="white").pack(fill="x",padx=30,pady=2)
+            tk.Button(self.main,text=f"{m['started'][:16]}  •  {m['title']}  •  {m['project'] or 'Без проекта'}",command=lambda x=m:self.show_meeting_detail(x),bg="#1b202a",fg="white",anchor="w",padx=15,pady=9,bd=0,activebackground="#252b38",activeforeground="white").pack(fill="x",padx=30,pady=2)
+    def show_meeting_detail(self,m):
+        self.clear()
+        d=MeetingDetail(self.main,m,on_back=self.meetings)
+        d.pack(fill="both",expand=True)
     def tasks(self):
         self.clear(); tk.Label(self.main,text="Задачи",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w",padx=30,pady=25)
         c=db(); rows=c.execute("select * from tasks order by id desc").fetchall(); c.close()
