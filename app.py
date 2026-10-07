@@ -626,10 +626,11 @@ class App(tk.Tk):
         self.meetings()
 
     def finish_transcription_success(self,mid,tr):
-        threading.Thread(target=self.process_ai_background,args=(mid,tr),daemon=True).start()
+        project=self.project.get()
+        threading.Thread(target=self.process_ai_background,args=(mid,tr,project),daemon=True).start()
         self.status.set("Расшифровка готова. Формирую тезисы и задачи…")
-    def process_ai_background(self,mid,tr):
-        data=ai_analyze(tr,self.project.get())
+    def process_ai_background(self,mid,tr,project):
+        data=ai_analyze(tr,project)
         self.after(0,lambda d=data:self.finish_ai(mid,tr,d))
     def finish_ai(self,mid,tr,data):
         if data.get("ai_error"):
@@ -639,6 +640,10 @@ class App(tk.Tk):
             self.meetings(); return
         self.processing=False
         self.review(data,self.last_recording,tr)
+
+    def review(self,data,path,tr):
+        # Показываем пользователю результат локального AI перед записью тезисов и задач.
+        Review(self,data,lambda d:self.save_meeting(d,path,tr))
 
     def save_meeting(self,d,path,tr):
         c=db(); project=d.get("project") or self.project.get() or ""; now=datetime.now().isoformat(timespec="seconds"); title=d.get("title") or self.titlev.get()
