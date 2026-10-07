@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.20"
+VERSION="1.1.21"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -42,10 +42,22 @@ def transcribe_stereo(path):
                 with wave.open(str(p),"wb") as w:
                     w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(a[:,i].tobytes())
                 segs,_=model.transcribe(str(p),beam_size=1,vad_filter=True,language="ru")
+                got=False
                 for s in segs:
                     t=clean(s.text)
-                    if t: out.append((float(s.start),label,t))
-        out.sort(); return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
+                    if t:
+                        got=True; out.append((float(s.start),label,t))
+                # Если VAD решил, что дорожка слишком тихая, пробуем без VAD.
+                if not got:
+                    segs,_=model.transcribe(str(p),beam_size=1,vad_filter=False,language="ru")
+                    for s in segs:
+                        t=clean(s.text)
+                        if t: out.append((float(s.start),label,t))
+        out.sort()
+        text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
+        if text: return text
+        # Крайний fallback: транскрибируем готовую смешанную запись целиком.
+        return transcribe_file(path)
     except Exception as e: return "[Ошибка транскрибации: %s]"%e
 
 def transcribe_file(path):
@@ -233,6 +245,8 @@ class MeetingDetail(tk.Frame):
         q.insert("1.0","\n".join(f"{x['task']} | {x['owner'] or ''} | {x['deadline'] or ''}" for x in tasks)); q.config(state="disabled")
         ttk.Label(f,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w")
         tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
+        if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
+            ttk.Button(f,text="↻ Повторить транскрибацию",command=lambda:self.retry_transcription(m["id"],m["audio"])).pack(anchor="w",pady=(4,6))
         row=ttk.Frame(f); row.pack(fill="x",pady=(8,0))
         ttk.Button(row,text="▶ Открыть запись",command=lambda:self.play(m["audio"])).pack(side="left")
         ttk.Button(row,text="🎤 Микрофон",command=lambda:self.play(self.track_path(m["audio"],"mic"))).pack(side="left",padx=6)
@@ -276,6 +290,17 @@ class MeetingDetail(tk.Frame):
             try: c.rollback(); c.close()
             except Exception: pass
             messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\\n"+str(e))
+    def retry_transcription(self,meeting_id,audio):
+        if not audio or not Path(audio).exists():
+            messagebox.showerror("Транскрибация","Файл записи не найден.")
+            return
+        source=self.source_path(audio)
+        if not Path(source).exists():
+            source=audio
+        c=db()
+        c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",meeting_id)); c.commit(); c.close()
+        self.status.set("Расшифровка выполняется в фоне…")
+        threading.Thread(target=self.process_meeting_background,args=(meeting_id,audio,source),daemon=True).start()
     def play(self,path):
         if not path or not Path(path).exists(): messagebox.showerror("Запись","Файл записи не найден"); return
         try: os.startfile(path)
