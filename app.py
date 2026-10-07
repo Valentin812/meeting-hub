@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.21"
+VERSION="1.1.22"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -299,6 +299,7 @@ class MeetingDetail(tk.Frame):
             source=audio
         c=db()
         c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",meeting_id)); c.commit(); c.close()
+        self.pending_meeting_id=meeting_id
         self.status.set("Расшифровка выполняется в фоне…")
         threading.Thread(target=self.process_meeting_background,args=(meeting_id,audio,source),daemon=True).start()
     def play(self,path):
