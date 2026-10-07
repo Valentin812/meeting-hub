@@ -27,7 +27,7 @@ jobs:
           @'
           [Setup]
           AppName=Meeting Hub
-          AppVersion=1.1.16
+          AppVersion=1.1.17
           DefaultDirName={localappdata}\Programs\Meeting Hub
           OutputDir=.
           OutputBaseFilename=MeetingHubSetup
@@ -35,6 +35,15 @@ jobs:
           Uninstallable=yes
           [Files]
           Source: "..\dist\MeetingHub\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+          [Code]
+          function PrepareToInstall(var NeedsRestart: Boolean): String;
+          var
+            ResultCode: Integer;
+          begin
+            Result := '';
+            Exec(ExpandConstant('{cmd}'), '/C taskkill /IM MeetingHub.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+            Sleep(1000);
+          end;
           Source: "..\bootstrap_ai.ps1"; DestDir: "{app}"; Flags: ignoreversion
           [Icons]
           Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
