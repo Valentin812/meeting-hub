@@ -848,7 +848,20 @@ class App(tk.Tk):
         self.clear(); tk.Label(self.main,text="Встречи",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w",padx=30,pady=25)
         c=db(); rows=c.execute("select * from meetings order by id desc limit 50").fetchall(); c.close()
         for m in rows:
-            tk.Button(self.main,text=f"{m['started'][:16]}  •  {m['title']}  •  {m['project'] or 'Без проекта'}",command=lambda x=m:self.show_meeting_detail(x),bg="#1b202a",fg="white",anchor="w",padx=15,pady=9,bd=0,activebackground="#252b38",activeforeground="white").pack(fill="x",padx=30,pady=2)
+            row=tk.Frame(self.main,bg="#1b202a")
+            row.pack(fill="x",padx=30,pady=2)
+            tk.Button(row,text=f"{m['started'][:16]}  •  {m['title']}  •  {m['project'] or 'Без проекта'}",command=lambda x=m:self.show_meeting_detail(x),bg="#1b202a",fg="white",anchor="w",padx=15,pady=9,bd=0,activebackground="#252b38",activeforeground="white").pack(side="left",fill="x",expand=True)
+            status=m['status'] or ''
+            if status=='transcribing':
+                st='⏳ Транскрибация…'
+            elif status=='transcription_error':
+                st='⚠ Ошибка'
+            elif status in ('transcribed','approved'):
+                st='✓ Готово'
+            else:
+                st=''
+            if st:
+                tk.Label(row,text=st,bg="#1b202a",fg="#8f96a3",font=("Segoe UI",9)).pack(side="right",padx=15)
     def show_meeting_detail(self,m):
         self.clear()
         d=MeetingDetail(self.main,m,on_back=self.meetings)
