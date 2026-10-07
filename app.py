@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.23"
+VERSION="1.1.24"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -239,6 +239,60 @@ class Review(tk.Toplevel):
             if p and p[0]: d["tasks"].append({"task":p[0],"owner":p[1] if len(p)>1 else "","deadline":p[2] if len(p)>2 else ""})
         self.save(d); self.destroy()
 
+class AudioPlayer(tk.Frame):
+    def __init__(self,parent,path):
+        super().__init__(parent)
+        self.path=str(path or ""); self.alias="MeetingHubAudio"; self.playing=False; self.duration=0; self.position=0
+        self.scale=ttk.Scale(self,from_=0,to=100,orient="horizontal",command=self.seek)
+        self.scale.pack(side="left",fill="x",expand=True,padx=(0,8))
+        self.time_label=ttk.Label(self,text="00:00 / 00:00",width=13); self.time_label.pack(side="left",padx=(0,8))
+        ttk.Button(self,text="▶",width=4,command=self.play).pack(side="left",padx=2)
+        ttk.Button(self,text="Ⅱ",width=4,command=self.pause).pack(side="left",padx=2)
+        ttk.Button(self,text="■",width=4,command=self.stop).pack(side="left",padx=2)
+        self.after(250,self.update)
+    def cmd(self,cmd,buf=None,size=0):
+        return ctypes.windll.winmm.mciSendStringW(cmd,buf,size,None)
+    def open_audio(self):
+        if not Path(self.path).exists():
+            messagebox.showerror("Запись","Файл записи не найден."); return False
+        self.cmd(f"close {self.alias}")
+        p=self.path.replace('"','')
+        if self.cmd(f'open "{p}" type waveaudio alias {self.alias}')!=0:
+            messagebox.showerror("Запись","Не удалось открыть запись."); return False
+        buf=ctypes.create_unicode_buffer(64); self.cmd(f"status {self.alias} length",buf,64)
+        try: self.duration=int(buf.value or 0)
+        except: self.duration=0
+        self.scale.configure(to=max(1,self.duration)); return True
+    def play(self):
+        if self.position<=0 and not self.playing:
+            if not self.open_audio(): return
+        self.cmd(f"play {self.alias} from {int(self.position)}"); self.playing=True
+    def pause(self):
+        if self.playing: self.cmd(f"pause {self.alias}"); self.playing=False
+    def stop(self):
+        self.cmd(f"stop {self.alias}"); self.position=0; self.playing=False; self.scale.set(0)
+    def seek(self,value):
+        try:
+            self.position=int(float(value))
+            if self.playing: self.cmd(f"play {self.alias} from {self.position}")
+        except: pass
+    def update(self):
+        try:
+            if self.playing:
+                buf=ctypes.create_unicode_buffer(64); self.cmd(f"status {self.alias} position",buf,64)
+                self.position=int(buf.value or 0)
+                if self.duration and self.position>=self.duration: self.stop()
+            self.scale.set(self.position)
+            self.time_label.config(text=f"{self.position//60000:02d}:{(self.position//1000)%60:02d} / {self.duration//60000:02d}:{(self.duration//1000)%60:02d}")
+        except: pass
+        try: self.after(250,self.update)
+        except: pass
+    def destroy(self):
+        try: self.cmd(f"stop {self.alias}"); self.cmd(f"close {self.alias}")
+        except: pass
+        super().destroy()
+
+
 class MeetingDetail(tk.Frame):
     def __init__(self,parent,m,on_back=None):
         super().__init__(parent,bg="#101218")
@@ -258,17 +312,19 @@ class MeetingDetail(tk.Frame):
         q.insert("1.0","\n".join(f"{x['task']} | {x['owner'] or ''} | {x['deadline'] or ''}" for x in tasks)); q.config(state="disabled")
         ttk.Label(f,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w")
         tr=tk.Text(f); tr.pack(fill="both",expand=True); tr.insert("1.0",m["transcript"] or ""); tr.config(state="disabled")
+        self.transcribe_action=ttk.Label(f,text="",foreground="#666")
+        self.transcribe_action.pack(anchor="w",pady=(0,4))
         if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
-            ttk.Button(f,text="↻ Повторить транскрибацию",command=lambda:self.retry_transcription(m["id"],m["audio"])).pack(anchor="w",pady=(4,6))
-        row=ttk.Frame(f); row.pack(fill="x",pady=(8,0))
-        ttk.Button(row,text="▶ Открыть запись",command=lambda:self.play(m["audio"])).pack(side="left")
-        ttk.Button(row,text="🎤 Микрофон",command=lambda:self.play(self.track_path(m["audio"],"mic"))).pack(side="left",padx=6)
-        ttk.Button(row,text="🔊 Системный звук",command=lambda:self.play(self.track_path(m["audio"],"system"))).pack(side="left",padx=6)
-        ttk.Button(row,text="🎚 Исходник L/R",command=lambda:self.play(self.source_path(m["audio"]))).pack(side="left",padx=6)
-        ttk.Button(row,text="📁 Папка",command=lambda:open_recordings_folder()).pack(side="left",padx=6)
+            self.retry_btn=ttk.Button(f,text="↻ Повторить транскрибацию",command=lambda:self.retry_transcription(m["id"],m["audio"]))
+            self.retry_btn.pack(anchor="w",pady=(2,6))
+        else:
+            self.retry_btn=None
+        ttk.Label(f,text="Запись",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(4,2))
+        player=ttk.Frame(f); player.pack(fill="x",pady=(0,8))
+        self.audio_player=AudioPlayer(player,m["audio"]); self.audio_player.pack(fill="x")
+        row=ttk.Frame(f); row.pack(fill="x",pady=(2,0))
+        ttk.Button(row,text="📁 Открыть папку",command=lambda:open_recordings_folder()).pack(side="left")
         ttk.Button(row,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
-        src=self.source_path(m["audio"]); mic=self.track_path(m["audio"],"mic"); system=self.track_path(m["audio"],"system")
-        ttk.Label(f,text="Запись: смешанный звук (оба источника в обоих каналах)\\nМикрофон: "+mic+"\\nСистемный звук: "+system+"\\nИсходник L/R: "+src,wraplength=820).pack(anchor="w",pady=(8,0))
     def go_back(self):
         if self.on_back: self.on_back()
     def source_path(self,path):
