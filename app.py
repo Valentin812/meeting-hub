@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.31"
+VERSION="1.1.32"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -405,6 +405,8 @@ class MeetingDetail(tk.Frame):
             self.show_transcription_progress()
         elif m["status"]=="transcription_error":
             self.transcribe_action.config(text="⚠ Транскрибация не завершилась. Можно запустить повторно.")
+        elif (m["transcript"] or "").strip() and not (m["points"] or "").strip():
+            self.after(300,self.auto_ai_if_needed)
 
     def show_transcription_progress(self):
         self.transcribe_action.config(text="⏳ Идёт транскрибация. Можно продолжать пользоваться программой.")
@@ -466,6 +468,18 @@ class MeetingDetail(tk.Frame):
             try: c.rollback(); c.close()
             except Exception: pass
             messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\n"+str(e))
+
+    def auto_ai_if_needed(self):
+        if getattr(self.app,"processing",False):
+            return
+        c=db(); row=c.execute("select transcript,project,points,audio from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
+        if not row or not (row["transcript"] or "").strip() or (row["points"] or "").strip():
+            return
+        self.transcribe_action.config(text="⏳ Тезисы и задачи не найдены — AI запускается автоматически…")
+        self.app.pending_meeting_id=self.meeting_id
+        self.app.last_recording=Path(row["audio"]) if row["audio"] else None
+        self.app.processing=True
+        threading.Thread(target=self.app.process_ai_background,args=(self.meeting_id,row["transcript"],row["project"] or ""),daemon=True).start()
 
     def retry_ai_analysis(self):
         c=db(); row=c.execute("select transcript,project,title,audio from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
@@ -898,19 +912,34 @@ class App(tk.Tk):
         threading.Thread(target=self.process_ai_background,args=(mid,tr,project),daemon=True).start()
         self.status.set("Расшифровка готова. Формирую тезисы и задачи…")
     def process_ai_background(self,mid,tr,project):
-        data=ai_analyze(tr,project)
+        data={}
+        for attempt in range(1,4):
+            data=ai_analyze(tr,project)
+            points=data.get("points") if isinstance(data,dict) else None
+            if points:
+                break
+            if attempt<3:
+                time.sleep(5*attempt)
         self.after(0,lambda d=data:self.finish_ai(mid,tr,d))
+
     def finish_ai(self,mid,tr,data):
-        if data.get("ai_error"):
+        if data.get("ai_error") or not data.get("points"):
             self.processing=False; self.pending_meeting_id=mid; self.refresh_tray()
             if hasattr(self,"rec_btn"): self.rec_btn.config(text="● НАЧАТЬ ЗАПИСЬ",state="normal")
-            self.status.set("Расшифровка готова. AI-анализ не выполнен. Можно повторить.")
+            self.status.set("Расшифровка готова. AI не сформировал тезисы. Повторю позже при открытии встречи.")
             self.meetings(); return
         self.processing=False
+        self.pending_meeting_id=mid
+        if self.last_recording is None:
+            try:
+                c=db(); row=c.execute("select audio from meetings where id=?",(mid,)).fetchone(); c.close()
+                if row and row["audio"]: self.last_recording=Path(row["audio"])
+            except Exception: pass
         if hasattr(self,"retry_ai_btn"):
             try: self.retry_ai_btn.destroy()
             except Exception: pass
-        self.review(data,self.last_recording,tr)
+        # AI-результат сохраняем автоматически. Пользователь может потом изменить название встречи.
+        self.save_meeting(data,self.last_recording,tr)
 
     def review(self,data,path,tr):
         # Показываем пользователю результат локального AI перед записью тезисов и задач.
