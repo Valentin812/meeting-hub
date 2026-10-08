@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.32"
+VERSION="1.1.33"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -135,7 +135,7 @@ def ai_analyze(transcript,project=""):
         return subprocess.run(
             [exe,"run",OLLAMA,"--format","json"],
             input=text_prompt,capture_output=True,text=True,encoding="utf-8",errors="replace",
-            timeout=300,stdin=subprocess.PIPE,startupinfo=si,creationflags=flags
+            timeout=300,startupinfo=si,creationflags=flags
         )
 
     def parse_json(raw):
@@ -472,10 +472,17 @@ class MeetingDetail(tk.Frame):
     def auto_ai_if_needed(self):
         if getattr(self.app,"processing",False):
             return
-        c=db(); row=c.execute("select transcript,project,points,audio from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
-        if not row or not (row["transcript"] or "").strip() or (row["points"] or "").strip():
+        c=db()
+        row=c.execute("select transcript,project,points,audio from meetings where id=?",(self.meeting_id,)).fetchone()
+        task_count=c.execute("select count(*) n from tasks where meeting_id=?",(self.meeting_id,)).fetchone()["n"]
+        c.close()
+        if not row or not (row["transcript"] or "").strip():
             return
-        self.transcribe_action.config(text="⏳ Тезисы и задачи не найдены — AI запускается автоматически…")
+        # Анализ считается отсутствующим, если нет тезисов ИЛИ нет записанных задач.
+        # Это также чинит старые встречи, где транскрибация уже была, а AI не отработал.
+        if (row["points"] or "").strip() and task_count > 0:
+            return
+        self.transcribe_action.config(text="⏳ Тезисы или задачи не найдены — AI запускается автоматически…")
         self.app.pending_meeting_id=self.meeting_id
         self.app.last_recording=Path(row["audio"]) if row["audio"] else None
         self.app.processing=True
@@ -926,7 +933,7 @@ class App(tk.Tk):
         if data.get("ai_error") or not data.get("points"):
             self.processing=False; self.pending_meeting_id=mid; self.refresh_tray()
             if hasattr(self,"rec_btn"): self.rec_btn.config(text="● НАЧАТЬ ЗАПИСЬ",state="normal")
-            self.status.set("Расшифровка готова. AI не сформировал тезисы. Повторю позже при открытии встречи.")
+            self.status.set("Расшифровка готова. AI пока не сформировал тезисы и задачи. При открытии встречи попробую снова.")
             self.meetings(); return
         self.processing=False
         self.pending_meeting_id=mid
