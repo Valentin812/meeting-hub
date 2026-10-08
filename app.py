@@ -1,4 +1,4 @@
-import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time, shutil, re, urllib.request
+import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time, shutil, re, urllib.request, gc
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.38"
+VERSION="1.1.39"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -91,6 +91,8 @@ def transcribe_stereo(path):
                         if t: out.append((float(s.start),label,t))
                 out.sort()
                 text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
+                del model
+                gc.collect()
                 if text: return text
     except Exception:
         pass
@@ -108,7 +110,10 @@ def transcribe_file(path):
             t=clean(s.text)
             if t:
                 out.append(f"[{int(float(s.start)//60):02d}:{float(s.start)%60:04.1f}] Собеседники: {t}")
-        return "\n".join(out)
+        result="\n".join(out)
+        del model
+        gc.collect()
+        return result
     except Exception as e: return "[Ошибка транскрибации: %s]"%e
 
 def find_ollama():
@@ -192,6 +197,19 @@ def release_ollama_model():
             si=subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=0
             flags=subprocess.CREATE_NO_WINDOW
         subprocess.run([exe,"stop",OLLAMA],capture_output=True,text=True,timeout=15,startupinfo=si,creationflags=flags)
+    except Exception:
+        pass
+
+def set_low_process_priority():
+    # Не даём тяжёлой обработке блокировать работу Windows/пользователя.
+    if os.name != "nt":
+        return
+    try:
+        BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+        ctypes.windll.kernel32.SetPriorityClass(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            BELOW_NORMAL_PRIORITY_CLASS
+        )
     except Exception:
         pass
 
@@ -597,7 +615,7 @@ class App(tk.Tk):
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
         self.after(2500,self.recover_pending_work)
         self.after(3500,lambda: threading.Thread(target=release_ollama_model,daemon=True).start())
-        self.after(60000,self.recover_pending_work)
+        self.after(300000,self.recover_pending_work)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
         tk.Label(left,text="MEETING",bg="#151820",fg="white",font=("Segoe UI",11,"bold")).pack(pady=(25,0)); tk.Label(left,text="HUB",bg="#151820",fg="#7c8cff",font=("Segoe UI",20,"bold")).pack(pady=(0,2))
@@ -1028,13 +1046,13 @@ class App(tk.Tk):
 
     def process_ai_background(self,mid,tr,project):
         data={}
-        for attempt in range(1,4):
+        for attempt in range(1,3):
             data=ai_analyze(tr,project)
             points=data.get("points") if isinstance(data,dict) else None
             if points:
                 break
-            if attempt<3:
-                time.sleep(5*attempt)
+            if attempt<2:
+                time.sleep(5)
         self.after(0,lambda d=data:self.finish_ai(mid,tr,d))
 
     def recover_pending_work(self):
@@ -1143,4 +1161,6 @@ class App(tk.Tk):
         except Exception: pass
         self.destroy()
 
-if __name__=="__main__": App().mainloop()
+if __name__=="__main__":
+    set_low_process_priority()
+    App().mainloop()
