@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.28"
+VERSION="1.1.29"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -464,6 +464,18 @@ class AutoDetector:
         self.pending=False
         if not self.app.rec: self.app.auto_start(hit[0])
 
+class MeetingHubTrayIcon(pystray.Icon):
+    """Tray icon: show the context menu on both left and right mouse clicks."""
+    def _on_notify(self,wparam,lparam):
+        try:
+            from pystray._util import win32 as _pystray_win32
+            if lparam in (_pystray_win32.WM_LBUTTONUP,_pystray_win32.WM_RBUTTONUP):
+                lparam=_pystray_win32.WM_RBUTTONUP
+        except Exception:
+            pass
+        return super()._on_notify(wparam,lparam)
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
@@ -543,20 +555,20 @@ class App(tk.Tk):
 
 
     def setup_tray(self):
+        # Только основные действия — без списка последних записей и версии.
         menu=pystray.Menu(
             pystray.MenuItem(lambda item:self.tray_status(),lambda icon,item:False),
             pystray.MenuItem(lambda item:"✓ Автоподключение включено" if self.auto_enabled else "○ Автоподключение выключено",self.toggle_auto),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(lambda item:"▶ Принудительно начать запись",self.tray_start,enabled=lambda item:self.rec is None and self.countdown_window is None and not self.processing),
             pystray.MenuItem(lambda item:"■ Принудительно остановить запись",self.tray_stop,enabled=lambda item:self.rec is not None),
             pystray.MenuItem(lambda item:"🔇 Включить микрофон" if self.mic_muted else "🔇 Выключить микрофон",self.tray_mute,enabled=lambda item:self.rec is not None),
             pystray.MenuItem("📁 Открыть записи",lambda icon,item:open_recordings_folder()),
-            pystray.MenuItem("Последние записи",pystray.Menu(lambda:self.recording_items())),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Открыть Meeting Hub",lambda icon,item:self.show_window()),
             pystray.MenuItem("Выйти",lambda icon,item:self.quit_app())
         )
-        menu=pystray.Menu(*list(menu), pystray.MenuItem("Meeting Hub v"+VERSION,lambda icon,item:None,enabled=False))
-        self.icon=pystray.Icon("MeetingHub",tray_image(), "Meeting Hub v"+VERSION,menu)
+        self.icon=MeetingHubTrayIcon("MeetingHub",tray_image(), "Meeting Hub v"+VERSION,menu)
         try:
             self.icon.run_detached()
         except Exception:
@@ -744,6 +756,12 @@ class App(tk.Tk):
         if not self.rec: self.start_recording()
         else: self.stop_recording()
     def auto_stop(self): self.stop_recording()
+    def tray_start(self,icon,item): self.after(0,self.force_start_recording)
+    def force_start_recording(self):
+        if self.rec or self.processing: return
+        self._close_countdown()
+        self.force_stop_lock=False
+        self.start_recording(self.titlev.get() or "Новая встреча",False)
     def tray_stop(self,icon,item): self.after(0,self.force_stop_recording)
     def force_stop_recording(self):
         if not self.rec or self.processing: return
