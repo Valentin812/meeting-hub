@@ -60,5 +60,5 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: MeetingHub-Windows-Installer
+          name: MeetingHub-Windows-Installer-1.2.0-${{ github.run_id }}
           path: installer\MeetingHubSetup.exe
