@@ -1,4 +1,4 @@
-import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time, shutil
+import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time, shutil, re, urllib.request
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
@@ -474,19 +474,17 @@ class MeetingDetail(tk.Frame):
             return
         c=db()
         row=c.execute("select transcript,project,points,audio from meetings where id=?",(self.meeting_id,)).fetchone()
-        task_count=c.execute("select count(*) n from tasks where meeting_id=?",(self.meeting_id,)).fetchone()["n"]
         c.close()
         if not row or not (row["transcript"] or "").strip():
             return
-        # Анализ считается отсутствующим, если нет тезисов ИЛИ нет записанных задач.
-        # Это также чинит старые встречи, где транскрибация уже была, а AI не отработал.
-        if (row["points"] or "").strip() and task_count > 0:
+        # Задач может не быть по итогам встречи. Критерий готовности AI — наличие тезисов.
+        if (row["points"] or "").strip() and (row["points"] or "").strip() not in ("[]","null"):
             return
-        self.transcribe_action.config(text="⏳ Тезисы или задачи не найдены — AI запускается автоматически…")
+        self.transcribe_action.config(text="⏳ Тезисы не найдены — AI запускается автоматически…")
         self.app.pending_meeting_id=self.meeting_id
         self.app.last_recording=Path(row["audio"]) if row["audio"] else None
         self.app.processing=True
-        threading.Thread(target=self.app.process_ai_background,args=(self.meeting_id,row["transcript"],row["project"] or ""),daemon=True).start()
+        self.app.start_ai_job(self.meeting_id,row["transcript"],row["project"] or "")
 
     def retry_ai_analysis(self):
         c=db(); row=c.execute("select transcript,project,title,audio from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
@@ -501,7 +499,7 @@ class MeetingDetail(tk.Frame):
         if hasattr(self,"retry_ai_btn"):
             self.retry_ai_btn.config(text="⏳ Формирую тезисы и задачи…",state="disabled")
         self.transcribe_action.config(text="⏳ AI формирует тезисы и задачи…")
-        threading.Thread(target=self.app.process_ai_background,args=(self.meeting_id,tr,project),daemon=True).start()
+        self.app.start_ai_job(self.meeting_id,tr,project)
 
     def retry_transcription(self):
         audio=self.audio_path
@@ -519,11 +517,7 @@ class MeetingDetail(tk.Frame):
         self.app.processing=True
         self.app.status.set("Расшифровка выполняется в фоне…")
         self.show_transcription_progress()
-        threading.Thread(
-            target=self.app.process_meeting_background,
-            args=(self.meeting_id,Path(audio),Path(source)),
-            daemon=True
-        ).start()
+        self.app.start_transcription_job(self.meeting_id,Path(audio),Path(source))
 
 def open_recordings_folder():
     RECORDINGS.mkdir(exist_ok=True)
@@ -572,10 +566,13 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
         self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
+        self.active_transcriptions=set(); self.active_ai=set()
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
         self.countdown_window=None; self.countdown_after=None; self.countdown_value=0; self.countdown_title=""
         self.recording_overlay=None; self.overlay_after=None; self.overlay_hidden=False
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
+        self.after(2500,self.recover_pending_work)
+        self.after(60000,self.recover_pending_work)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
         tk.Label(left,text="MEETING",bg="#151820",fg="white",font=("Segoe UI",11,"bold")).pack(pady=(25,0)); tk.Label(left,text="HUB",bg="#151820",fg="#7c8cff",font=("Segoe UI",20,"bold")).pack(pady=(0,2))
@@ -888,7 +885,23 @@ class App(tk.Tk):
         self.status.set("Встреча сохранена. Расшифровка выполняется в фоне…")
         try: self.icon.notify("Встреча сохранена","Расшифровка выполняется в фоне")
         except Exception: pass
-        threading.Thread(target=self.process_meeting_background,args=(mid,result,source_p),daemon=True).start()
+        self.start_transcription_job(mid,result,source_p)
+
+    def start_transcription_job(self,mid,result,source_p):
+        if mid in self.active_transcriptions:
+            return False
+        self.active_transcriptions.add(mid)
+        try:
+            c=db(); c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",mid)); c.commit(); c.close()
+        except Exception: pass
+        threading.Thread(target=self._transcription_job_wrapper,args=(mid,result,source_p),daemon=True).start()
+        return True
+
+    def _transcription_job_wrapper(self,mid,result,source_p):
+        try:
+            self.process_meeting_background(mid,result,source_p)
+        finally:
+            self.active_transcriptions.discard(mid)
 
     def process_meeting_background(self,mid,result,source_p):
         # Транскрибация работает в отдельном worker-потоке с watchdog.
@@ -947,8 +960,22 @@ class App(tk.Tk):
 
     def finish_transcription_success(self,mid,tr):
         project=self.project.get()
-        threading.Thread(target=self.process_ai_background,args=(mid,tr,project),daemon=True).start()
+        self.start_ai_job(mid,tr,project)
         self.status.set("Расшифровка готова. Формирую тезисы и задачи…")
+    def start_ai_job(self,mid,tr,project):
+        if mid in self.active_ai:
+            return False
+        self.active_ai.add(mid)
+        self.pending_meeting_id=mid
+        threading.Thread(target=self._ai_job_wrapper,args=(mid,tr,project),daemon=True).start()
+        return True
+
+    def _ai_job_wrapper(self,mid,tr,project):
+        try:
+            self.process_ai_background(mid,tr,project)
+        finally:
+            self.active_ai.discard(mid)
+
     def process_ai_background(self,mid,tr,project):
         data={}
         for attempt in range(1,4):
@@ -959,6 +986,28 @@ class App(tk.Tk):
             if attempt<3:
                 time.sleep(5*attempt)
         self.after(0,lambda d=data:self.finish_ai(mid,tr,d))
+
+    def recover_pending_work(self):
+        # После перезапуска программы продолжаем незавершённые операции автоматически.
+        try:
+            c=db()
+            rows=c.execute("select id,audio,transcript,project,status,points from meetings where status in ('transcribing','transcription_error','transcribed','approved') or ((transcript is not null and trim(transcript)<>'') and (points is null or trim(points)='' or trim(points) in ('[]','null'))) order by id").fetchall()
+            c.close()
+            for row in rows:
+                mid=row["id"]; audio=row["audio"] or ""; status=row["status"] or ""
+                if status in ("transcribing","transcription_error"):
+                    if mid not in self.active_transcriptions and audio and Path(audio).exists():
+                        source=Path(audio).with_name(Path(audio).stem+"_source.wav")
+                        if not source.exists(): source=Path(audio)
+                        self.start_transcription_job(mid,Path(audio),source)
+                elif (row["transcript"] or "").strip():
+                    points=(row["points"] or "").strip()
+                    if (not points or points in ("[]","null")) and mid not in self.active_ai:
+                        self.start_ai_job(mid,row["transcript"],row["project"] or "")
+        except Exception:
+            pass
+        try: self.after(60000,self.recover_pending_work)
+        except Exception: pass
 
     def finish_ai(self,mid,tr,data):
         if data.get("ai_error") or not data.get("points"):
