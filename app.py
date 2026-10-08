@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.36"
+VERSION="1.1.37"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -364,7 +364,7 @@ class MeetingDetail(tk.Frame):
         actions=ttk.Frame(footer); actions.pack(fill="x")
         ttk.Button(actions,text="📁 Открыть папку",command=lambda:open_recordings_folder()).pack(side="left")
         self.retry_btn=ttk.Button(actions,text="↻ Повторить транскрибацию",command=self.retry_transcription)
-        if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
+        if m["status"] in ("transcribing","transcription_queued","transcription_error") or not (m["transcript"] or "").strip():
             self.retry_btn.pack(side="left",padx=(8,0))
         self.retry_ai_btn=ttk.Button(actions,text="✨ Сформировать тезисы и задачи",command=self.retry_ai_analysis)
         if (m["transcript"] or "").strip() and not has_points(m["points"]):
@@ -413,6 +413,8 @@ class MeetingDetail(tk.Frame):
         self.transcribe_progress=ttk.Progressbar(inner,mode="indeterminate")
         if m["status"]=="transcribing":
             self.show_transcription_progress()
+        elif m["status"]=="transcription_queued":
+            self.transcribe_action.config(text="⏳ Транскрибация в очереди…")
         elif m["status"]=="transcription_error":
             self.transcribe_action.config(text="⚠ Транскрибация не завершилась. Можно запустить повторно.")
         elif (m["transcript"] or "").strip() and not (m["points"] or "").strip():
@@ -902,6 +904,9 @@ class App(tk.Tk):
             return False
         self.transcription_queue.append((mid,result,source_p))
         self.transcription_queued.add(mid)
+        try:
+            c=db(); c.execute("update meetings set status=? where id=?",("transcription_queued",mid)); c.commit(); c.close()
+        except Exception: pass
         self._pump_transcription_queue()
         return True
 
@@ -1027,7 +1032,7 @@ class App(tk.Tk):
             c.close()
             for row in rows:
                 mid=row["id"]; audio=row["audio"] or ""; status=row["status"] or ""
-                if status in ("transcribing","transcription_error"):
+                if status in ("transcribing","transcription_queued","transcription_error"):
                     if mid not in self.active_transcriptions and audio and Path(audio).exists():
                         source=Path(audio).with_name(Path(audio).stem+"_source.wav")
                         if not source.exists(): source=Path(audio)
@@ -1094,8 +1099,10 @@ class App(tk.Tk):
             row.pack(fill="x",padx=30,pady=2)
             tk.Button(row,text=f"{m['started'][:16]}  •  {m['title']}  •  {m['project'] or 'Без проекта'}",command=lambda x=m:self.show_meeting_detail(x),bg="#1b202a",fg="white",anchor="w",padx=15,pady=9,bd=0,activebackground="#252b38",activeforeground="white").pack(side="left",fill="x",expand=True)
             status=m['status'] or ''
-            if status=='transcribing':
-                st='⏳ Транскрибация…'
+            if status=='transcription_queued':
+                st='⏳ В очереди на транскрибацию…'
+            elif status=='transcribing':
+                st='⏳ Транскрибируется…'
             elif status=='transcription_error':
                 st='⚠ Ошибка'
             elif status in ('transcribed','approved'):
