@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.37"
+VERSION="1.1.38"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -143,7 +143,7 @@ def ai_analyze(transcript,project=""):
 
     def run_ai(text_prompt):
         return subprocess.run(
-            [exe,"run",OLLAMA,"--format","json"],
+            [exe,"run",OLLAMA,"--format","json","--keepalive","0"],
             input=text_prompt,capture_output=True,text=True,encoding="utf-8",errors="replace",
             timeout=300,startupinfo=si,creationflags=flags
         )
@@ -182,6 +182,18 @@ def ai_analyze(transcript,project=""):
     except Exception as e:
         return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Ошибка локального AI: "+str(e)}
 
+
+def release_ollama_model():
+    try:
+        exe=find_ollama()
+        if not exe: return
+        si=None; flags=0
+        if os.name=="nt":
+            si=subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=0
+            flags=subprocess.CREATE_NO_WINDOW
+        subprocess.run([exe,"stop",OLLAMA],capture_output=True,text=True,timeout=15,startupinfo=si,creationflags=flags)
+    except Exception:
+        pass
 
 class Recorder:
     def __init__(self,mic=None,speaker=None):
@@ -584,6 +596,7 @@ class App(tk.Tk):
         self.recording_overlay=None; self.overlay_after=None; self.overlay_hidden=False
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
         self.after(2500,self.recover_pending_work)
+        self.after(3500,lambda: threading.Thread(target=release_ollama_model,daemon=True).start())
         self.after(60000,self.recover_pending_work)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
