@@ -31,7 +31,7 @@ jobs:
           @'
           [Setup]
           AppName=Meeting Hub
-          AppVersion=1.1.36
+          AppVersion=1.1.37
           DefaultDirName={localappdata}\Programs\Meeting Hub
           OutputDir=.
           OutputBaseFilename=MeetingHubSetup
