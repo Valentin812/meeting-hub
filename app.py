@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.30"
+VERSION="1.1.31"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -116,6 +116,8 @@ def ai_analyze(transcript,project=""):
 Нужны ТОЛЬКО:
 1) 3-7 коротких тезисов о том, что обсуждали и к чему пришли.
 2) Только реальные задачи, которые были поставлены на встрече.
+3) Короткое понятное название встречи по содержанию, 3-8 слов. Не используй дату, "Google Chrome", "Новая встреча" и другие технические названия.
+4) Проект: используй указанный проект, если он задан. Если проект не задан или его нельзя уверенно определить по тексту — оставь пустым. Не выдумывай проект.
 Не выдумывай задачи, людей или сроки. Если ответственный/срок не названы — оставь поле пустым.
 Верни ТОЛЬКО JSON:
 {{"title":"","project":"{project or ""}","points":[],"tasks":[{{"task":"","owner":"","deadline":""}}]}}
@@ -354,6 +356,9 @@ class MeetingDetail(tk.Frame):
         self.retry_btn=ttk.Button(actions,text="↻ Повторить транскрибацию",command=self.retry_transcription)
         if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
             self.retry_btn.pack(side="left",padx=(8,0))
+        self.retry_ai_btn=ttk.Button(actions,text="✨ Сформировать тезисы и задачи",command=self.retry_ai_analysis)
+        if (m["transcript"] or "").strip() and not (m["points"] or "").strip():
+            self.retry_ai_btn.pack(side="left",padx=(8,0))
         ttk.Button(actions,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
 
         # Скроллится только содержимое встречи, а не вся страница.
@@ -461,6 +466,21 @@ class MeetingDetail(tk.Frame):
             try: c.rollback(); c.close()
             except Exception: pass
             messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\n"+str(e))
+
+    def retry_ai_analysis(self):
+        c=db(); row=c.execute("select transcript,project,title,audio from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
+        if not row or not (row["transcript"] or "").strip():
+            messagebox.showinfo("AI-анализ","Сначала дождитесь расшифровки встречи.")
+            return
+        tr=row["transcript"]
+        project=row["project"] or ""
+        self.app.pending_meeting_id=self.meeting_id
+        self.app.last_recording=Path(row["audio"]) if row["audio"] else None
+        self.app.processing=True
+        if hasattr(self,"retry_ai_btn"):
+            self.retry_ai_btn.config(text="⏳ Формирую тезисы и задачи…",state="disabled")
+        self.transcribe_action.config(text="⏳ AI формирует тезисы и задачи…")
+        threading.Thread(target=self.app.process_ai_background,args=(self.meeting_id,tr,project),daemon=True).start()
 
     def retry_transcription(self):
         audio=self.audio_path
@@ -887,6 +907,9 @@ class App(tk.Tk):
             self.status.set("Расшифровка готова. AI-анализ не выполнен. Можно повторить.")
             self.meetings(); return
         self.processing=False
+        if hasattr(self,"retry_ai_btn"):
+            try: self.retry_ai_btn.destroy()
+            except Exception: pass
         self.review(data,self.last_recording,tr)
 
     def review(self,data,path,tr):
