@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.35"
+VERSION="1.1.36"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -47,7 +47,7 @@ def transcribe_stereo(path):
         if ch>=2:
             a=np.frombuffer(raw,np.int16).reshape(-1,ch)
             from faster_whisper import WhisperModel
-            model=WhisperModel(WHISPER,device="cpu",compute_type="int8"); out=[]
+            model=WhisperModel(WHISPER,device="cpu",compute_type="int8",cpu_threads=2,num_workers=1); out=[]
             with tempfile.TemporaryDirectory() as td:
                 for i,label in ((0,"Вы"),(1,"Собеседники")):
                     p=Path(td)/f"c{i}.wav"
@@ -576,7 +576,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
         self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
-        self.active_transcriptions=set(); self.active_ai=set()
+        self.active_transcriptions=set(); self.active_ai=set(); self.transcription_queue=[]; self.ai_queue=[]; self.transcription_queued=set(); self.ai_queued=set()
         self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
         self.countdown_window=None; self.countdown_after=None; self.countdown_value=0; self.countdown_title=""
         self.recording_overlay=None; self.overlay_after=None; self.overlay_hidden=False
@@ -898,20 +898,31 @@ class App(tk.Tk):
         self.start_transcription_job(mid,result,source_p)
 
     def start_transcription_job(self,mid,result,source_p):
-        if mid in self.active_transcriptions:
+        if mid in self.active_transcriptions or mid in self.transcription_queued:
             return False
+        self.transcription_queue.append((mid,result,source_p))
+        self.transcription_queued.add(mid)
+        self._pump_transcription_queue()
+        return True
+
+    def _pump_transcription_queue(self):
+        if self.active_transcriptions or not self.transcription_queue:
+            return
+        mid,result,source_p=self.transcription_queue.pop(0)
+        self.transcription_queued.discard(mid)
         self.active_transcriptions.add(mid)
         try:
             c=db(); c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",mid)); c.commit(); c.close()
         except Exception: pass
         threading.Thread(target=self._transcription_job_wrapper,args=(mid,result,source_p),daemon=True).start()
-        return True
 
     def _transcription_job_wrapper(self,mid,result,source_p):
         try:
             self.process_meeting_background(mid,result,source_p)
         finally:
             self.active_transcriptions.discard(mid)
+            try: self.after(100,self._pump_transcription_queue)
+            except Exception: pass
 
     def process_meeting_background(self,mid,result,source_p):
         # Транскрибация работает в отдельном worker-потоке с watchdog.
@@ -973,18 +984,29 @@ class App(tk.Tk):
         self.start_ai_job(mid,tr,project)
         self.status.set("Расшифровка готова. Формирую тезисы и задачи…")
     def start_ai_job(self,mid,tr,project):
-        if mid in self.active_ai:
+        if mid in self.active_ai or mid in self.ai_queued:
             return False
+        self.ai_queue.append((mid,tr,project))
+        self.ai_queued.add(mid)
+        self._pump_ai_queue()
+        return True
+
+    def _pump_ai_queue(self):
+        if self.active_ai or not self.ai_queue:
+            return
+        mid,tr,project=self.ai_queue.pop(0)
+        self.ai_queued.discard(mid)
         self.active_ai.add(mid)
         self.pending_meeting_id=mid
         threading.Thread(target=self._ai_job_wrapper,args=(mid,tr,project),daemon=True).start()
-        return True
 
     def _ai_job_wrapper(self,mid,tr,project):
         try:
             self.process_ai_background(mid,tr,project)
         finally:
             self.active_ai.discard(mid)
+            try: self.after(100,self._pump_ai_queue)
+            except Exception: pass
 
     def process_ai_background(self,mid,tr,project):
         data={}
