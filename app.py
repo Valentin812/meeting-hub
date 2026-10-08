@@ -124,15 +124,15 @@ def ai_analyze(transcript,project=""):
     try:
         r=run_ai(prompt)
         d=parse_json(r.stdout)
-        if d: return d
+        if d and d.get("points"): return d
         retry=f"""Верни только корректный JSON, без markdown и пояснений.
 Формат: {{"title":"","project":"","points":["тезис"],"tasks":[{{"task":"","owner":"","deadline":""}}]}}
 Сделай 3-7 коротких тезисов. Задачи — только явно поставленные на встрече. Если задач нет, tasks=[].
 Текст встречи:
 {transcript[:20000]}"""
         r2=run_ai(retry); d=parse_json(r2.stdout)
-        if d: return d
-        raise RuntimeError((r2.stderr or r.stderr or "Ollama не вернул JSON").strip())
+        if d and d.get("points"): return d
+        raise RuntimeError((r2.stderr or r.stderr or "Ollama не вернул JSON или не сформировал тезисы").strip())
     except Exception as e:
         return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Ошибка локального AI: "+str(e)}
 
@@ -305,7 +305,9 @@ class MeetingDetail(tk.Frame):
         f=ttk.Frame(self,padding=18); f.pack(fill="both",expand=True)
         header=ttk.Frame(f); header.pack(fill="x",side="top")
         ttk.Button(header,text="← К встречам",command=self.go_back).pack(anchor="w",pady=(0,8))
-        ttk.Label(header,text=m["title"] or "Без названия",font=("Segoe UI",18,"bold")).pack(anchor="w")
+        title_row=ttk.Frame(header); title_row.pack(fill="x",anchor="w")
+        self.title_label=ttk.Label(title_row,text=m["title"] or "Без названия",font=("Segoe UI",18,"bold")); self.title_label.pack(side="left")
+        ttk.Button(title_row,text="✎ Изменить название",command=self.edit_title).pack(side="left",padx=(12,0))
         ttk.Label(header,text=f"{m['started'][:16]}   •   {m['project'] or 'Без проекта'}").pack(anchor="w",pady=(2,10))
 
         footer=ttk.Frame(f); footer.pack(fill="x",side="bottom",pady=(8,0))
@@ -372,6 +374,21 @@ class MeetingDetail(tk.Frame):
         self.transcribe_progress.start(12)
         if hasattr(self,"retry_btn"):
             self.retry_btn.config(text="⏳ Идёт транскрибация…",state="disabled")
+
+    def edit_title(self):
+        c=db(); row=c.execute("select title from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
+        current=(row["title"] if row else "") or "Без названия"
+        w=tk.Toplevel(self); w.title("Название встречи"); w.geometry("520x150"); w.transient(self.winfo_toplevel()); w.grab_set()
+        ttk.Label(w,text="Название встречи").pack(anchor="w",padx=15,pady=(15,5))
+        v=tk.StringVar(value=current)
+        e=ttk.Entry(w,textvariable=v); e.pack(fill="x",padx=15); e.focus_set(); e.select_range(0,"end")
+        def save():
+            title=v.get().strip() or "Без названия"
+            c=db(); c.execute("update meetings set title=? where id=?",(title,self.meeting_id)); c.commit(); c.close()
+            self.title_label.config(text=title)
+            w.destroy()
+        ttk.Button(w,text="Сохранить",command=save).pack(anchor="e",padx=15,pady=12)
+        e.bind("<Return>",lambda e:save()); w.bind("<Escape>",lambda e:w.destroy())
 
     def go_back(self):
         if self.on_back: self.on_back()
