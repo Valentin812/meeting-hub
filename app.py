@@ -70,7 +70,32 @@ def groq_multipart(file_path, model, response_format="verbose_json"):
         raise RuntimeError(f"Groq: HTTP {e.code} {detail[:500]}")
 
 def groq_transcribe_file(path,label="Собеседники"):
-    result=groq_multipart(path,GROQ_TRANSCRIBE_MODEL,"verbose_json"); out=[]
+    p=Path(path)
+    # Free tier accepts direct audio uploads up to 25 MB. Native Meeting Hub
+    # WAV is chunked and downsampled to 16 kHz mono so long meetings fit.
+    if p.suffix.lower()==".wav" and p.stat().st_size>20*1024*1024:
+        out=[]
+        with wave.open(str(p),"rb") as w:
+            ch=w.getnchannels(); rate=w.getframerate(); frames=w.getnframes()
+            chunk_frames=max(1,int(rate*600))
+            for offset in range(0,frames,chunk_frames):
+                w.setpos(offset); n=min(chunk_frames,frames-offset); raw=w.readframes(n)
+                a=np.frombuffer(raw,np.int16)
+                if ch>1: a=a.reshape(-1,ch)[:,0]
+                if rate!=16000:
+                    step=max(1,int(round(rate/16000))); a=a[::step]
+                with tempfile.NamedTemporaryFile(suffix=".wav",delete=False) as tf:
+                    cp=Path(tf.name)
+                try:
+                    with wave.open(str(cp),"wb") as cw:
+                        cw.setnchannels(1); cw.setsampwidth(2); cw.setframerate(16000); cw.writeframes(a.astype(np.int16).tobytes())
+                    for start,sp,t in groq_transcribe_file(cp,label):
+                        out.append((start+offset/rate,sp,t))
+                finally:
+                    try: cp.unlink(missing_ok=True)
+                    except Exception: pass
+        return out
+    result=groq_multipart(p,GROQ_TRANSCRIBE_MODEL,"verbose_json"); out=[]
     for seg in result.get("segments",[]) or []:
         t=clean(seg.get("text",""))
         if t: out.append((float(seg.get("start",0)),label,t))
