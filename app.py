@@ -30,35 +30,63 @@ init()
 def clean(s): return " ".join(str(s or "").split())
 
 def transcribe_stereo(path):
+    # Внутренние записи Meeting Hub: WAV с L=микрофон, R=системный звук.
     try:
-        with wave.open(str(path),"rb") as w: ch=w.getnchannels(); rate=w.getframerate(); raw=w.readframes(w.getnframes())
-        if ch<2: return transcribe_file(path)
-        a=np.frombuffer(raw,np.int16).reshape(-1,ch)
+        with wave.open(str(path),"rb") as w:
+            ch=w.getnchannels(); rate=w.getframerate(); raw=w.readframes(w.getnframes())
+        if ch>=2:
+            a=np.frombuffer(raw,np.int16).reshape(-1,ch)
+            from faster_whisper import WhisperModel
+            model=WhisperModel(WHISPER,device="cpu",compute_type="int8"); out=[]
+            with tempfile.TemporaryDirectory() as td:
+                for i,label in ((0,"Вы"),(1,"Собеседники")):
+                    p=Path(td)/f"c{i}.wav"
+                    with wave.open(str(p),"wb") as w:
+                        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(a[:,i].tobytes())
+                    segs,_=model.transcribe(str(p),beam_size=1,vad_filter=True,language="ru")
+                    got=False
+                    for s in segs:
+                        t=clean(s.text)
+                        if t:
+                            got=True; out.append((float(s.start),label,t))
+                    if not got:
+                        segs,_=model.transcribe(str(p),beam_size=1,vad_filter=False,language="ru")
+                        for s in segs:
+                            t=clean(s.text)
+                            if t: out.append((float(s.start),label,t))
+            out.sort()
+            text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
+            if text: return text
+            return transcribe_file(path)
+    except Exception:
+        pass
+
+    # Внешние MP3/M4A/FLAC/OGG и другие форматы: faster-whisper умеет декодировать их сам.
+    # Если файл действительно стерео и каналы отличаются, сохраняем разделение каналов.
+    try:
         from faster_whisper import WhisperModel
-        model=WhisperModel(WHISPER,device="cpu",compute_type="int8"); out=[]
-        with tempfile.TemporaryDirectory() as td:
-            for i,label in ((0,"Вы"),(1,"Собеседники")):
-                p=Path(td)/f"c{i}.wav"
-                with wave.open(str(p),"wb") as w:
-                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(a[:,i].tobytes())
-                segs,_=model.transcribe(str(p),beam_size=1,vad_filter=True,language="ru")
-                got=False
-                for s in segs:
-                    t=clean(s.text)
-                    if t:
-                        got=True; out.append((float(s.start),label,t))
-                # Если VAD решил, что дорожка слишком тихая, пробуем без VAD.
-                if not got:
-                    segs,_=model.transcribe(str(p),beam_size=1,vad_filter=False,language="ru")
+        from faster_whisper.audio import decode_audio
+        left,right=decode_audio(str(path),sampling_rate=16000,split_stereo=True)
+        if len(left) and len(right):
+            lm=float(np.sqrt(np.mean(left*left))); rm=float(np.sqrt(np.mean(right*right)))
+            corr=1.0
+            if lm>1e-5 and rm>1e-5:
+                corr=float(np.corrcoef(left,right)[0,1])
+            if abs(corr)<0.995 or abs(lm-rm)>0.01:
+                model=WhisperModel(WHISPER,device="cpu",compute_type="int8"); out=[]
+                for audio,label in ((left,"Вы"),(right,"Собеседники")):
+                    segs,_=model.transcribe(audio,beam_size=1,vad_filter=True,language="ru")
                     for s in segs:
                         t=clean(s.text)
                         if t: out.append((float(s.start),label,t))
-        out.sort()
-        text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
-        if text: return text
-        # Крайний fallback: транскрибируем готовую смешанную запись целиком.
-        return transcribe_file(path)
-    except Exception as e: return "[Ошибка транскрибации: %s]"%e
+                out.sort()
+                text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
+                if text: return text
+    except Exception:
+        pass
+
+    # Моно/смешанный внешний файл: таймкоды сохраняем, но спикера честно не угадываем.
+    return transcribe_file(path)
 
 def transcribe_file(path):
     try:
