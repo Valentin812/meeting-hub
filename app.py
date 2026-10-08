@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.29"
+VERSION="1.1.30"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -63,8 +63,14 @@ def transcribe_stereo(path):
 def transcribe_file(path):
     try:
         from faster_whisper import WhisperModel
-        model=WhisperModel(WHISPER,device="cpu",compute_type="int8"); segs,_=model.transcribe(str(path),beam_size=1,vad_filter=True,language="ru")
-        return " ".join(clean(x.text) for x in segs if clean(x.text))
+        model=WhisperModel(WHISPER,device="cpu",compute_type="int8")
+        segs,_=model.transcribe(str(path),beam_size=1,vad_filter=True,language="ru")
+        out=[]
+        for s in segs:
+            t=clean(s.text)
+            if t:
+                out.append(f"[{int(float(s.start)//60):02d}:{float(s.start)%60:04.1f}] Собеседники: {t}")
+        return "\n".join(out)
     except Exception as e: return "[Ошибка транскрибации: %s]"%e
 
 def find_ollama():
@@ -325,7 +331,7 @@ class MeetingDetail(tk.Frame):
         # Скроллится только содержимое встречи, а не вся страница.
         content=ttk.Frame(f)
         content.pack(fill="both",expand=True,side="top")
-        canvas=tk.Canvas(content,bg="#101218",highlightthickness=0,bd=0)
+        canvas=tk.Canvas(content,bg="#f0f0f0",highlightthickness=0,bd=0)
         scrollbar=ttk.Scrollbar(content,orient="vertical",command=canvas.yview)
         inner=ttk.Frame(canvas)
         inner_window=canvas.create_window((0,0),window=inner,anchor="nw")
@@ -566,6 +572,8 @@ class App(tk.Tk):
             c.commit(); c.close()
             self.status.set("Запись загружена. Расшифровка выполняется…")
             self.meetings()
+            # Для внешнего файла передаём сам исходник: faster-whisper умеет читать WAV/MP3/M4A/FLAC/OGG.
+            # Если это стерео с разными каналами — transcribe_stereo сохранит таймкоды и разделение по каналам.
             threading.Thread(target=self.process_meeting_background,args=(mid,str(dst),str(dst)),daemon=True).start()
         except Exception as e:
             messagebox.showerror("Загрузка записи","Не удалось загрузить запись:\n"+str(e))
