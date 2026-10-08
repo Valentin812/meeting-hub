@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.34"
+VERSION="1.1.35"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -28,6 +28,16 @@ def init():
 init()
 
 def clean(s): return " ".join(str(s or "").split())
+
+def has_points(value):
+    try:
+        if isinstance(value,list): return any(clean(x) for x in value)
+        raw=str(value or "").strip()
+        if not raw or raw in ("[]","null"): return False
+        data=json.loads(raw)
+        return isinstance(data,list) and any(clean(x) for x in data)
+    except Exception:
+        return bool(str(value or "").strip())
 
 def transcribe_stereo(path):
     # Внутренние записи Meeting Hub: WAV с L=микрофон, R=системный звук.
@@ -357,7 +367,7 @@ class MeetingDetail(tk.Frame):
         if m["status"] in ("transcribing","transcription_error") or not (m["transcript"] or "").strip():
             self.retry_btn.pack(side="left",padx=(8,0))
         self.retry_ai_btn=ttk.Button(actions,text="✨ Сформировать тезисы и задачи",command=self.retry_ai_analysis)
-        if (m["transcript"] or "").strip() and not (m["points"] or "").strip():
+        if (m["transcript"] or "").strip() and not has_points(m["points"]):
             self.retry_ai_btn.pack(side="left",padx=(8,0))
         ttk.Button(actions,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
 
@@ -478,7 +488,7 @@ class MeetingDetail(tk.Frame):
         if not row or not (row["transcript"] or "").strip():
             return
         # Задач может не быть по итогам встречи. Критерий готовности AI — наличие тезисов.
-        if (row["points"] or "").strip() and (row["points"] or "").strip() not in ("[]","null"):
+        if has_points(row["points"]):
             return
         self.transcribe_action.config(text="⏳ Тезисы не найдены — AI запускается автоматически…")
         self.app.pending_meeting_id=self.meeting_id
