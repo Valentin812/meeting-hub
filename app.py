@@ -10,7 +10,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.33"
+VERSION="1.1.34"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
@@ -891,13 +891,44 @@ class App(tk.Tk):
         threading.Thread(target=self.process_meeting_background,args=(mid,result,source_p),daemon=True).start()
 
     def process_meeting_background(self,mid,result,source_p):
+        # Транскрибация работает в отдельном worker-потоке с watchdog.
+        # Если faster-whisper завис/застрял на повреждённом файле, встреча больше
+        # не будет висеть бесконечно в статусе "Транскрибация…".
         tr=""; err=""
+        started=time.time()
         for attempt in range(1,4):
-            tr=transcribe_stereo(source_p)
-            if tr and not tr.startswith("[Ошибка транскрибации:"): break
-            err=tr
-            if attempt<3:
-                self.after(0,lambda n=attempt:self.status.set(f"Расшифровка: повторная попытка {n+1}/3…")); time.sleep(15*attempt)
+            try:
+                box={"text":None,"error":None}
+                def worker():
+                    try:
+                        box["text"]=transcribe_stereo(source_p)
+                    except Exception as e:
+                        box["error"]=str(e)
+                th=threading.Thread(target=worker,daemon=True)
+                th.start()
+                # Максимум 20 минут на одну попытку. Это с запасом для длинной
+                # встречи на CPU, но не позволяет зависшему Whisper блокировать UI.
+                while th.is_alive() and time.time()-started < 20*60:
+                    elapsed=int(time.time()-started)
+                    if elapsed % 10 == 0:
+                        self.after(0,lambda e=elapsed:self.status.set(f"Расшифровка выполняется… {e//60:02d}:{e%60:02d}"))
+                    time.sleep(1)
+                if th.is_alive():
+                    err="Превышено время ожидания транскрибации (20 минут)."
+                    break
+                if box["error"]:
+                    err=box["error"]; tr=""
+                else:
+                    tr=box["text"] or ""
+                if tr and not tr.startswith("[Ошибка транскрибации:"):
+                    break
+                err=tr or err or "Транскрибация не вернула текст."
+                if attempt<3:
+                    self.after(0,lambda n=attempt:self.status.set(f"Расшифровка: повторная попытка {n+1}/3…"))
+                    time.sleep(15*attempt)
+            except Exception as e:
+                err=str(e); tr=""
+                if attempt<3: time.sleep(15*attempt)
         if not tr or tr.startswith("[Ошибка транскрибации:"):
             self.after(0,lambda e=err:self.finish_transcription_failure(mid,e)); return
         try:
