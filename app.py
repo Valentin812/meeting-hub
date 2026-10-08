@@ -10,13 +10,14 @@ import pystray
 from PIL import Image, ImageDraw
 
 APP=Path(__file__).resolve().parent
-VERSION="1.1.39"
+VERSION="1.2.0"
 DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
 DATA.mkdir(parents=True,exist_ok=True)
 RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
 DB=DATA/"meetinghub.db"
-WHISPER=os.getenv("MH_WHISPER_MODEL","base")
-OLLAMA=os.getenv("MH_OLLAMA_MODEL","qwen2.5:1.5b-instruct")
+GROQ_TRANSCRIBE_MODEL="whisper-large-v3-turbo"
+GROQ_AI_MODEL="openai/gpt-oss-20b"
+CONFIG=DATA/"config.json"
 
 def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
@@ -26,6 +27,17 @@ def init():
     CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY,title TEXT,project TEXT,started TEXT,audio TEXT,transcript TEXT,summary TEXT,decisions TEXT,questions TEXT,points TEXT,status TEXT);
     CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY,meeting_id INTEGER,project TEXT,task TEXT,owner TEXT,deadline TEXT,status TEXT,created TEXT);"""); c.commit(); c.close()
 init()
+
+def load_config():
+    try: return json.loads(CONFIG.read_text(encoding="utf-8"))
+    except Exception: return {}
+
+def save_config(data):
+    try: CONFIG.write_text(json.dumps(data,ensure_ascii=False),encoding="utf-8")
+    except Exception: pass
+
+def get_groq_key():
+    return os.getenv("GROQ_API_KEY") or load_config().get("groq_api_key","")
 
 def clean(s): return " ".join(str(s or "").split())
 
@@ -39,166 +51,79 @@ def has_points(value):
     except Exception:
         return bool(str(value or "").strip())
 
-def transcribe_stereo(path):
-    # Внутренние записи Meeting Hub: WAV с L=микрофон, R=системный звук.
+def groq_multipart(file_path, model, response_format="verbose_json"):
+    key=get_groq_key()
+    if not key: raise RuntimeError("Не настроен бесплатный Groq API. Откройте «☁ Настроить облачный AI».")
+    p=Path(file_path); data=p.read_bytes()
+    boundary="----MeetingHubBoundary"+str(int(time.time()*1000))
+    mime="audio/wav" if p.suffix.lower()==".wav" else "application/octet-stream"
+    def field(name,value):
+        return (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").encode()
+    body=field("model",model)+field("language","ru")+field("response_format",response_format)+field("temperature","0")
+    body+=(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{p.name}\"\r\nContent-Type: {mime}\r\n\r\n").encode()+data+b"\r\n"
+    body+=f"--{boundary}--\r\n".encode()
+    req=urllib.request.Request("https://api.groq.com/openai/v1/audio/transcriptions",data=body,method="POST",headers={"Authorization":"Bearer "+key,"Content-Type":f"multipart/form-data; boundary={boundary}","User-Agent":"MeetingHub/"+VERSION})
     try:
-        with wave.open(str(path),"rb") as w:
-            ch=w.getnchannels(); rate=w.getframerate(); raw=w.readframes(w.getnframes())
+        with urllib.request.urlopen(req,timeout=900) as r: return json.loads(r.read().decode("utf-8","replace"))
+    except urllib.error.HTTPError as e:
+        detail=e.read().decode("utf-8","replace")
+        raise RuntimeError(f"Groq: HTTP {e.code} {detail[:500]}")
+
+def groq_transcribe_file(path,label="Собеседники"):
+    result=groq_multipart(path,GROQ_TRANSCRIBE_MODEL,"verbose_json"); out=[]
+    for seg in result.get("segments",[]) or []:
+        t=clean(seg.get("text",""))
+        if t: out.append((float(seg.get("start",0)),label,t))
+    if not out and clean(result.get("text","")): out.append((0.0,label,clean(result.get("text",""))))
+    return out
+
+def transcribe_stereo(path):
+    try:
+        with wave.open(str(path),"rb") as w: ch=w.getnchannels(); rate=w.getframerate(); raw=w.readframes(w.getnframes())
         if ch>=2:
-            a=np.frombuffer(raw,np.int16).reshape(-1,ch)
-            from faster_whisper import WhisperModel
-            model=WhisperModel(WHISPER,device="cpu",compute_type="int8",cpu_threads=2,num_workers=1); out=[]
+            a=np.frombuffer(raw,np.int16).reshape(-1,ch); out=[]
             with tempfile.TemporaryDirectory() as td:
                 for i,label in ((0,"Вы"),(1,"Собеседники")):
                     p=Path(td)/f"c{i}.wav"
                     with wave.open(str(p),"wb") as w:
                         w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(a[:,i].tobytes())
-                    segs,_=model.transcribe(str(p),beam_size=1,vad_filter=True,language="ru")
-                    got=False
-                    for s in segs:
-                        t=clean(s.text)
-                        if t:
-                            got=True; out.append((float(s.start),label,t))
-                    if not got:
-                        segs,_=model.transcribe(str(p),beam_size=1,vad_filter=False,language="ru")
-                        for s in segs:
-                            t=clean(s.text)
-                            if t: out.append((float(s.start),label,t))
-            out.sort()
-            text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
-            if text: return text
-            return transcribe_file(path)
+                    out.extend(groq_transcribe_file(p,label))
+            out.sort(key=lambda x:x[0])
+            return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
     except Exception:
         pass
-
-    # Внешние MP3/M4A/FLAC/OGG и другие форматы: faster-whisper умеет декодировать их сам.
-    # Если файл действительно стерео и каналы отличаются, сохраняем разделение каналов.
-    try:
-        from faster_whisper import WhisperModel
-        from faster_whisper.audio import decode_audio
-        left,right=decode_audio(str(path),sampling_rate=16000,split_stereo=True)
-        if len(left) and len(right):
-            lm=float(np.sqrt(np.mean(left*left))); rm=float(np.sqrt(np.mean(right*right)))
-            corr=1.0
-            if lm>1e-5 and rm>1e-5:
-                corr=float(np.corrcoef(left,right)[0,1])
-            if abs(corr)<0.995 or abs(lm-rm)>0.01:
-                model=WhisperModel(WHISPER,device="cpu",compute_type="int8"); out=[]
-                for audio,label in ((left,"Вы"),(right,"Собеседники")):
-                    segs,_=model.transcribe(audio,beam_size=1,vad_filter=True,language="ru")
-                    for s in segs:
-                        t=clean(s.text)
-                        if t: out.append((float(s.start),label,t))
-                out.sort()
-                text="\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
-                del model
-                gc.collect()
-                if text: return text
-    except Exception:
-        pass
-
-    # Моно/смешанный внешний файл: таймкоды сохраняем, но спикера честно не угадываем.
-    return transcribe_file(path)
+    out=groq_transcribe_file(path,"Собеседники"); out.sort(key=lambda x:x[0])
+    return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
 
 def transcribe_file(path):
-    try:
-        from faster_whisper import WhisperModel
-        model=WhisperModel(WHISPER,device="cpu",compute_type="int8")
-        segs,_=model.transcribe(str(path),beam_size=1,vad_filter=True,language="ru")
-        out=[]
-        for s in segs:
-            t=clean(s.text)
-            if t:
-                out.append(f"[{int(float(s.start)//60):02d}:{float(s.start)%60:04.1f}] Собеседники: {t}")
-        result="\n".join(out)
-        del model
-        gc.collect()
-        return result
-    except Exception as e: return "[Ошибка транскрибации: %s]"%e
-
-def find_ollama():
-    candidates=[os.getenv("OLLAMA_EXE",""),os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),os.path.expandvars(r"%LOCALAPPDATA%\Ollama\ollama.exe"),r"C:\Program Files\Ollama\ollama.exe"]
-    for p in candidates:
-        if p and Path(p).exists(): return p
-    try:
-        r=subprocess.run(["where","ollama"],capture_output=True,text=True,timeout=5)
-        if r.returncode==0 and r.stdout.strip(): return r.stdout.splitlines()[0].strip()
-    except Exception: pass
-    return None
+    out=groq_transcribe_file(path,"Собеседники")
+    return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
 
 def ai_analyze(transcript,project=""):
-    prompt=f"""Ты помощник Meeting Hub. Сделай очень краткий разбор новой встречи на русском.
-Нужны ТОЛЬКО:
-1) 3-7 коротких тезисов о том, что обсуждали и к чему пришли.
-2) Только реальные задачи, которые были поставлены на встрече.
-3) Короткое понятное название встречи по содержанию, 3-8 слов. Не используй дату, "Google Chrome", "Новая встреча" и другие технические названия.
-4) Проект: используй указанный проект, если он задан. Если проект не задан или его нельзя уверенно определить по тексту — оставь пустым. Не выдумывай проект.
-Не выдумывай задачи, людей или сроки. Если ответственный/срок не названы — оставь поле пустым.
-Верни ТОЛЬКО JSON:
+    prompt=f"""Ты помощник Meeting Hub. Сделай очень краткий разбор встречи на русском.
+Нужны ТОЛЬКО 3-7 коротких тезисов, реальные задачи, короткое название 3-8 слов и проект, если он явно понятен.
+Не выдумывай задачи, людей или сроки. Верни ТОЛЬКО JSON без markdown:
 {{"title":"","project":"{project or ""}","points":[],"tasks":[{{"task":"","owner":"","deadline":""}}]}}
 РАСШИФРОВКА:
-{transcript[:30000]}"""
-    exe=find_ollama()
-    if not exe:
-        return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Локальный AI не найден."}
-    si=None; flags=0
-    if os.name=="nt":
-        si=subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=0
-        flags=subprocess.CREATE_NO_WINDOW
-
-    def run_ai(text_prompt):
-        return subprocess.run(
-            [exe,"run",OLLAMA,"--format","json","--keepalive","0"],
-            input=text_prompt,capture_output=True,text=True,encoding="utf-8",errors="replace",
-            timeout=300,startupinfo=si,creationflags=flags
-        )
-
-    def parse_json(raw):
-        raw=(raw or "").strip(); a=raw.find("{"); b=raw.rfind("}")
-        if a<0 or b<=a: return None
-        raw=raw[a:b+1]
-        fixed=[]; quoted=False; escaped=False
-        for ch in raw:
-            if escaped: fixed.append(ch); escaped=False; continue
-            if ch=="\\": fixed.append(ch); escaped=True; continue
-            if ch=='"': fixed.append(ch); quoted=not quoted; continue
-            if quoted and ord(ch)<32: fixed.append("\\n" if ch=="\n" else ("\\t" if ch=="\t" else " "))
-            else: fixed.append(ch)
-        d=json.loads("".join(fixed))
-        if not isinstance(d,dict): return None
-        points=d.get("points",[])
-        tasks=d.get("tasks",[])
+{transcript[:50000]}"""
+    key=get_groq_key()
+    if not key: return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Не настроен бесплатный Groq API."}
+    payload=json.dumps({"model":GROQ_AI_MODEL,"messages":[{"role":"system","content":"Ты краткий ассистент протокола встреч. Отвечай только валидным JSON."},{"role":"user","content":prompt}],"temperature":0.1,"max_completion_tokens":1200},ensure_ascii=False).encode("utf-8")
+    req=urllib.request.Request("https://api.groq.com/openai/v1/chat/completions",data=payload,method="POST",headers={"Authorization":"Bearer "+key,"Content-Type":"application/json","User-Agent":"MeetingHub/"+VERSION})
+    try:
+        with urllib.request.urlopen(req,timeout=180) as r: raw=json.loads(r.read().decode("utf-8","replace"))
+        content=raw.get("choices",[{}])[0].get("message",{}).get("content",""); a=content.find("{"); b=content.rfind("}")
+        if a<0 or b<=a: raise RuntimeError("Groq не вернул JSON")
+        d=json.loads(content[a:b+1]); points=d.get("points",[]) if isinstance(d,dict) else []; tasks=d.get("tasks",[]) if isinstance(d,dict) else []
         if not isinstance(points,list): points=[str(points)]
         if not isinstance(tasks,list): tasks=[]
-        return {"title":d.get("title",""),"project":d.get("project",project),"points":[str(x) for x in points if clean(x)],"tasks":tasks}
-
-    try:
-        r=run_ai(prompt)
-        d=parse_json(r.stdout)
-        if d and d.get("points"): return d
-        retry=f"""Верни только корректный JSON, без markdown и пояснений.
-Формат: {{"title":"","project":"","points":["тезис"],"tasks":[{{"task":"","owner":"","deadline":""}}]}}
-Сделай 3-7 коротких тезисов. Задачи — только явно поставленные на встрече. Если задач нет, tasks=[].
-Текст встречи:
-{transcript[:20000]}"""
-        r2=run_ai(retry); d=parse_json(r2.stdout)
-        if d and d.get("points"): return d
-        raise RuntimeError((r2.stderr or r.stderr or "Ollama не вернул JSON или не сформировал тезисы").strip())
-    except Exception as e:
-        return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Ошибка локального AI: "+str(e)}
-
-
-def release_ollama_model():
-    try:
-        exe=find_ollama()
-        if not exe: return
-        si=None; flags=0
-        if os.name=="nt":
-            si=subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=0
-            flags=subprocess.CREATE_NO_WINDOW
-        subprocess.run([exe,"stop",OLLAMA],capture_output=True,text=True,timeout=15,startupinfo=si,creationflags=flags)
-    except Exception:
-        pass
+        points=[str(x) for x in points if clean(x)]
+        if not points: raise RuntimeError("Groq не сформировал тезисы")
+        return {"title":d.get("title",""),"project":d.get("project",project),"points":points,"tasks":tasks}
+    except urllib.error.HTTPError as e:
+        detail=e.read().decode("utf-8","replace")
+        return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":f"Groq: HTTP {e.code} {detail[:500]}"}
+    except Exception as e: return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Ошибка облачного AI: "+str(e)}
 
 def set_low_process_priority():
     # Не даём тяжёлой обработке блокировать работу Windows/пользователя.
@@ -609,12 +534,11 @@ class App(tk.Tk):
         super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
         self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
         self.active_transcriptions=set(); self.active_ai=set(); self.transcription_queue=[]; self.ai_queue=[]; self.transcription_queued=set(); self.ai_queued=set()
-        self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="Ожидание встречи")
+        self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="☁ Облачный AI: "+("готов" if get_groq_key() else "не настроен"))
         self.countdown_window=None; self.countdown_after=None; self.countdown_value=0; self.countdown_title=""
         self.recording_overlay=None; self.overlay_after=None; self.overlay_hidden=False
         self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
         self.after(2500,self.recover_pending_work)
-        self.after(3500,lambda: threading.Thread(target=release_ollama_model,daemon=True).start())
         self.after(300000,self.recover_pending_work)
     def build(self):
         left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
@@ -622,10 +546,21 @@ class App(tk.Tk):
         tk.Label(left,text="v"+VERSION,bg="#151820",fg="#6f7787",font=("Segoe UI",9)).pack(pady=(0,12))
         self.update_label=tk.Label(left,text="",bg="#151820",fg="#6fe0a1",font=("Segoe UI",9),cursor="hand2",wraplength=160,justify="left")
         self.update_label.pack(fill="x",padx=18,pady=(0,8))
-        for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks),("📥 Загрузить запись",self.import_recording),("Проверить обновления",self.check_updates_now)]:
+        for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks),("📥 Загрузить запись",self.import_recording),("☁ Настроить облачный AI",self.cloud_settings),("Проверить обновления",self.check_updates_now)]:
             tk.Button(left,text=name,command=cmd,anchor="w",bg="#151820",fg="#b0b7c5",bd=0,padx=20,pady=10).pack(fill="x")
         self.home()
         threading.Thread(target=self.check_updates_background,daemon=True).start()
+    def cloud_settings(self):
+        w=tk.Toplevel(self); w.title("Бесплатный облачный AI"); w.geometry("620x250"); w.transient(self); w.grab_set()
+        ttk.Label(w,text="Groq API — бесплатный режим",font=("Segoe UI",12,"bold")).pack(anchor="w",padx=18,pady=(18,6))
+        ttk.Label(w,text="Groq используется для транскрибации и тезисов. Платные сервисы не подключаются.").pack(anchor="w",padx=18)
+        v=tk.StringVar(value=get_groq_key()); e=ttk.Entry(w,textvariable=v,show="•"); e.pack(fill="x",padx=18,pady=12); e.focus_set()
+        ttk.Label(w,text="Ключ хранится локально. При превышении бесплатного лимита Groq вернёт ошибку, и Meeting Hub не будет переходить на платную обработку.",foreground="#666",wraplength=560).pack(anchor="w",padx=18)
+        def save():
+            cfg=load_config(); cfg["groq_api_key"]=v.get().strip(); save_config(cfg); w.destroy(); self.status.set("☁ Облачный AI: "+("готов" if get_groq_key() else "не настроен")); self.home()
+        ttk.Button(w,text="Сохранить",command=save).pack(anchor="e",padx=18,pady=15)
+        e.bind("<Return>",lambda e:save()); w.bind("<Escape>",lambda e:w.destroy())
+
     def check_updates_background(self):
         try:
             url="https://raw.githubusercontent.com/Valentin812/meeting-hub/main/app.py"
@@ -683,7 +618,7 @@ class App(tk.Tk):
             self.meetings()
             # Для внешнего файла передаём сам исходник: faster-whisper умеет читать WAV/MP3/M4A/FLAC/OGG.
             # Если это стерео с разными каналами — transcribe_stereo сохранит таймкоды и разделение по каналам.
-            threading.Thread(target=self.process_meeting_background,args=(mid,str(dst),str(dst)),daemon=True).start()
+            self.start_transcription_job(mid,Path(dst),Path(dst))
         except Exception as e:
             messagebox.showerror("Загрузка записи","Не удалось загрузить запись:\n"+str(e))
 
@@ -741,6 +676,7 @@ class App(tk.Tk):
         c=db(); n=c.execute("select count(*) n from meetings").fetchone()["n"]; t=c.execute("select count(*) n from tasks where status='open'").fetchone()["n"]; c.close()
         tk.Label(self.main,text=f"Встреч: {n}    Открытых задач: {t}",bg="#101218",fg="#9ba3b3",font=("Segoe UI",12)).pack(anchor="w",padx=30)
         tk.Label(self.main,text="● Автоподключение к встречам включено",bg="#101218",fg="#45d19a").pack(anchor="w",padx=30,pady=(18,0))
+        tk.Label(self.main,text="☁ AI: Groq (бесплатный режим)"+(" • настроен" if get_groq_key() else " • требуется API-ключ"),bg="#101218",fg="#9ba3b3").pack(anchor="w",padx=30,pady=(8,0))
         tk.Label(self.main,text="Запись управляется из системного трея: остановить запись или выключить микрофон можно прямо там.",bg="#101218",fg="#9ba3b3",wraplength=800,justify="left").pack(anchor="w",padx=30,pady=(10,0))
         ttk.Button(self.main,text="＋ Новая встреча",command=self.new).pack(anchor="w",padx=30,pady=25)
     def new(self):
