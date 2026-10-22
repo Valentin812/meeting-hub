@@ -1,6 +1,0 @@
-soundcard
-soundfile
-numpy
-pystray
-Pillow
-pyinstaller

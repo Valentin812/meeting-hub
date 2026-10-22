@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+meeting_hub_settings.json
+*.log
+build/
+dist/
