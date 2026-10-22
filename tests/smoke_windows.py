@@ -21,7 +21,7 @@ def check_signals():
     obs = win_signals.observe()
     print(f"windows: {len(obs.windows)}; mic: {obs.mic!r}; error: {obs.mic_error!r}")
     assert isinstance(obs.windows, list)
-    assert obs.mic is None or isinstance(obs.mic, set)
+    assert isinstance(obs.mic, set), f"микрофон не проверяется: {obs.mic_error}"
     start = time.perf_counter()
     for _ in range(20):
         win_signals.observe()

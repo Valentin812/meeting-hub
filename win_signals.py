@@ -127,7 +127,11 @@ def mic_in_use():
         raise OSError("проверка микрофона доступна только в Windows")
     import winreg
     users = set()
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, MIC_KEY) as root:
+    try:
+        root_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, MIC_KEY)
+    except FileNotFoundError:
+        return users          # микрофоном на этом компьютере ещё никто не пользовался
+    with root_key as root:
         _scan(winreg, root, users)
         try:
             with winreg.OpenKey(root, "NonPackaged") as nonpackaged:
