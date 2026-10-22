@@ -26,7 +26,8 @@ def check_signals():
     for _ in range(20):
         win_signals.observe()
     per_tick = (time.perf_counter() - start) / 20 * 1000
-    print(f"observe(): {per_tick:.1f} ms на опрос")
+    print(f"::notice title=signals::windows={len(obs.windows)} mic={obs.mic!r} error={obs.mic_error!r} "
+          f"observe={per_tick:.1f} ms")
     assert per_tick < 500, "опрос слишком медленный"
 
 
@@ -83,6 +84,13 @@ if __name__ == "__main__":
     if os.name != "nt":
         print("Пропуск: тест только для Windows")
         sys.exit(0)
-    check_signals()
-    check_ui()
+    import traceback
+    for check in (check_signals, check_ui):
+        try:
+            check()
+        except Exception:
+            # Аннотация видна в интерфейсе GitHub и через API, даже когда сам лог недоступен.
+            text = traceback.format_exc().strip().replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+            print(f"::error title={check.__name__}::{text}")
+            sys.exit(1)
     print("SMOKE OK")
