@@ -1,1127 +1,1029 @@
-import os, json, sqlite3, threading, subprocess, wave, tempfile, ctypes, time, shutil, re, urllib.request, gc
+# -*- coding: utf-8 -*-
+"""Meeting Hub v4 — локальный анализ расшифровок через Ollama."""
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import numpy as np
-import soundcard as sc
-import soundfile as sf
-import pystray
-from PIL import Image, ImageDraw
+import json, csv, urllib.request, urllib.error, threading, re, time, subprocess, math
 
-APP=Path(__file__).resolve().parent
-VERSION="1.2.0"
-DATA=Path(os.getenv("LOCALAPPDATA",APP))/ "Meeting Hub"
-DATA.mkdir(parents=True,exist_ok=True)
-RECORDINGS=DATA/"recordings"; RECORDINGS.mkdir(exist_ok=True)
-DB=DATA/"meetinghub.db"
-GROQ_TRANSCRIBE_MODEL="whisper-large-v3-turbo"
-GROQ_AI_MODEL="openai/gpt-oss-20b"
-CONFIG=DATA/"config.json"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+DEFAULT_MODEL = "qwen2.5:3b"
 
-def db():
-    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
+SYSTEM_PROMPT = """Ты — помощник по протоколированию рабочих встреч на русском языке.
+Работай ТОЛЬКО с фактами из переданной расшифровки. Не выдумывай решения, задачи, имена, суммы и сроки.
+Распознавание речи может содержать ошибки. Если смысл неясен, пометь фрагмент как требующий проверки.
+Различай:
+- summary: короткое резюме без повторов;
+- decisions: только явно принятые решения;
+- tasks: только явные поручения/действия. Если ответственный или срок не назван, оставь поле пустым;
+- open_questions: вопросы, которые остались без ответа или требуют уточнения.
+Верни строго JSON без markdown и без текста вокруг, по схеме:
+{
+ "summary": ["..."],
+ "decisions": [{"text":"...", "evidence":"дословный короткий фрагмент"}],
+ "tasks": [{"task":"...", "owner":"", "deadline":"", "evidence":"дословный короткий фрагмент", "confidence":"high|medium|low"}],
+ "open_questions": [{"question":"...", "evidence":"дословный короткий фрагмент"}],
+ "uncertain_fragments": [{"text":"...", "reason":"..."}]
+}
+Не превращай предложение или обсуждение в решение, если согласие не выражено явно.
+Фразы «просит добавить», «можно добавить», «надо бы», «обсудили» сами по себе НЕ доказывают, что решение принято.
+Если нет явного подтверждения согласия, не добавляй фразу в decisions.
+Если неясно, было ли поручение принято, добавь фрагмент в uncertain_fragments, а не в tasks.
+Не выдумывай формулировки вроде «отменять не нужно», если этого нет в расшифровке.
+Не дублируй одну и ту же фразу в decisions и tasks без отдельного явного основания.
+В evidence приводи только короткую цитату, реально присутствующую в расшифровке.
+"""
 
-def init():
-    c=db(); c.executescript("""CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY,name TEXT UNIQUE,summary TEXT,created TEXT);
-    CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY,title TEXT,project TEXT,started TEXT,audio TEXT,transcript TEXT,summary TEXT,decisions TEXT,questions TEXT,points TEXT,status TEXT);
-    CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY,meeting_id INTEGER,project TEXT,task TEXT,owner TEXT,deadline TEXT,status TEXT,created TEXT);"""); c.commit(); c.close()
-init()
-
-def load_config():
-    try: return json.loads(CONFIG.read_text(encoding="utf-8"))
-    except Exception: return {}
-
-def save_config(data):
-    try: CONFIG.write_text(json.dumps(data,ensure_ascii=False),encoding="utf-8")
-    except Exception: pass
-
-def get_groq_key():
-    return os.getenv("GROQ_API_KEY") or load_config().get("groq_api_key","")
-
-def clean(s): return " ".join(str(s or "").split())
-
-def has_points(value):
+def ollama_request(model, transcript, cancel_event=None):
+    payload = {
+        "model": model, "stream": True, "format": "json",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": "Проанализируй расшифровку встречи. Верни JSON по схеме из системного сообщения.\n\nРАСШИФРОВКА:\n" + transcript}
+        ],
+        "options": {"temperature": 0.1, "num_thread": 2, "num_ctx": 4096}
+    }
+    req = urllib.request.Request(OLLAMA_URL, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                                headers={"Content-Type": "application/json"}, method="POST")
+    chunks = []
+    response = urllib.request.urlopen(req, timeout=900)
     try:
-        if isinstance(value,list): return any(clean(x) for x in value)
-        raw=str(value or "").strip()
-        if not raw or raw in ("[]","null"): return False
-        data=json.loads(raw)
-        return isinstance(data,list) and any(clean(x) for x in data)
-    except Exception:
-        return bool(str(value or "").strip())
-
-def groq_multipart(file_path, model, response_format="verbose_json"):
-    key=get_groq_key()
-    if not key: raise RuntimeError("Не настроен бесплатный Groq API. Откройте «☁ Настроить облачный AI».")
-    p=Path(file_path); data=p.read_bytes()
-    boundary="----MeetingHubBoundary"+str(int(time.time()*1000))
-    mime="audio/wav" if p.suffix.lower()==".wav" else "application/octet-stream"
-    def field(name,value):
-        return (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").encode()
-    body=field("model",model)+field("language","ru")+field("response_format",response_format)+field("temperature","0")
-    body+=(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{p.name}\"\r\nContent-Type: {mime}\r\n\r\n").encode()+data+b"\r\n"
-    body+=f"--{boundary}--\r\n".encode()
-    req=urllib.request.Request("https://api.groq.com/openai/v1/audio/transcriptions",data=body,method="POST",headers={"Authorization":"Bearer "+key,"Content-Type":f"multipart/form-data; boundary={boundary}","User-Agent":"MeetingHub/"+VERSION})
-    try:
-        with urllib.request.urlopen(req,timeout=900) as r: return json.loads(r.read().decode("utf-8","replace"))
-    except urllib.error.HTTPError as e:
-        detail=e.read().decode("utf-8","replace")
-        raise RuntimeError(f"Groq: HTTP {e.code} {detail[:500]}")
-
-def groq_transcribe_file(path,label="Собеседники"):
-    p=Path(path)
-    # Free tier accepts direct audio uploads up to 25 MB. Native Meeting Hub
-    # WAV is chunked and downsampled to 16 kHz mono so long meetings fit.
-    if p.suffix.lower()==".wav" and p.stat().st_size>20*1024*1024:
-        out=[]
-        with wave.open(str(p),"rb") as w:
-            ch=w.getnchannels(); rate=w.getframerate(); frames=w.getnframes()
-            chunk_frames=max(1,int(rate*600))
-            for offset in range(0,frames,chunk_frames):
-                w.setpos(offset); n=min(chunk_frames,frames-offset); raw=w.readframes(n)
-                a=np.frombuffer(raw,np.int16)
-                if ch>1: a=a.reshape(-1,ch)[:,0]
-                if rate!=16000:
-                    step=max(1,int(round(rate/16000))); a=a[::step]
-                with tempfile.NamedTemporaryFile(suffix=".wav",delete=False) as tf:
-                    cp=Path(tf.name)
-                try:
-                    with wave.open(str(cp),"wb") as cw:
-                        cw.setnchannels(1); cw.setsampwidth(2); cw.setframerate(16000); cw.writeframes(a.astype(np.int16).tobytes())
-                    for start,sp,t in groq_transcribe_file(cp,label):
-                        out.append((start+offset/rate,sp,t))
-                finally:
-                    try: cp.unlink(missing_ok=True)
-                    except Exception: pass
-        return out
-    result=groq_multipart(p,GROQ_TRANSCRIBE_MODEL,"verbose_json"); out=[]
-    for seg in result.get("segments",[]) or []:
-        t=clean(seg.get("text",""))
-        if t: out.append((float(seg.get("start",0)),label,t))
-    if not out and clean(result.get("text","")): out.append((0.0,label,clean(result.get("text",""))))
-    return out
-
-def transcribe_stereo(path):
-    try:
-        with wave.open(str(path),"rb") as w: ch=w.getnchannels(); rate=w.getframerate(); raw=w.readframes(w.getnframes())
-        if ch>=2:
-            a=np.frombuffer(raw,np.int16).reshape(-1,ch); out=[]
-            with tempfile.TemporaryDirectory() as td:
-                for i,label in ((0,"Вы"),(1,"Собеседники")):
-                    p=Path(td)/f"c{i}.wav"
-                    with wave.open(str(p),"wb") as w:
-                        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(a[:,i].tobytes())
-                    out.extend(groq_transcribe_file(p,label))
-            out.sort(key=lambda x:x[0])
-            return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
-    except Exception:
-        pass
-    out=groq_transcribe_file(path,"Собеседники"); out.sort(key=lambda x:x[0])
-    return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
-
-def transcribe_file(path):
-    out=groq_transcribe_file(path,"Собеседники")
-    return "\n".join(f"[{int(x//60):02d}:{x%60:04.1f}] {sp}: {t}" for x,sp,t in out)
-
-def ai_analyze(transcript,project=""):
-    prompt=f"""Ты помощник Meeting Hub. Сделай очень краткий разбор встречи на русском.
-Нужны ТОЛЬКО 3-7 коротких тезисов, реальные задачи, короткое название 3-8 слов и проект, если он явно понятен.
-Не выдумывай задачи, людей или сроки. Верни ТОЛЬКО JSON без markdown:
-{{"title":"","project":"{project or ""}","points":[],"tasks":[{{"task":"","owner":"","deadline":""}}]}}
-РАСШИФРОВКА:
-{transcript[:50000]}"""
-    key=get_groq_key()
-    if not key: return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Не настроен бесплатный Groq API."}
-    payload=json.dumps({"model":GROQ_AI_MODEL,"messages":[{"role":"system","content":"Ты краткий ассистент протокола встреч. Отвечай только валидным JSON."},{"role":"user","content":prompt}],"temperature":0.1,"max_completion_tokens":1200},ensure_ascii=False).encode("utf-8")
-    req=urllib.request.Request("https://api.groq.com/openai/v1/chat/completions",data=payload,method="POST",headers={"Authorization":"Bearer "+key,"Content-Type":"application/json","User-Agent":"MeetingHub/"+VERSION})
-    try:
-        with urllib.request.urlopen(req,timeout=180) as r: raw=json.loads(r.read().decode("utf-8","replace"))
-        content=raw.get("choices",[{}])[0].get("message",{}).get("content",""); a=content.find("{"); b=content.rfind("}")
-        if a<0 or b<=a: raise RuntimeError("Groq не вернул JSON")
-        d=json.loads(content[a:b+1]); points=d.get("points",[]) if isinstance(d,dict) else []; tasks=d.get("tasks",[]) if isinstance(d,dict) else []
-        if not isinstance(points,list): points=[str(points)]
-        if not isinstance(tasks,list): tasks=[]
-        points=[str(x) for x in points if clean(x)]
-        if not points: raise RuntimeError("Groq не сформировал тезисы")
-        return {"title":d.get("title",""),"project":d.get("project",project),"points":points,"tasks":tasks}
-    except urllib.error.HTTPError as e:
-        detail=e.read().decode("utf-8","replace")
-        return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":f"Groq: HTTP {e.code} {detail[:500]}"}
-    except Exception as e: return {"title":"","project":project,"points":[],"tasks":[],"ai_error":True,"error":"Ошибка облачного AI: "+str(e)}
-
-def set_low_process_priority():
-    # Не даём тяжёлой обработке блокировать работу Windows/пользователя.
-    if os.name != "nt":
-        return
-    try:
-        BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-        ctypes.windll.kernel32.SetPriorityClass(
-            ctypes.windll.kernel32.GetCurrentProcess(),
-            BELOW_NORMAL_PRIORITY_CLASS
-        )
-    except Exception:
-        pass
-
-class Recorder:
-    def __init__(self,mic=None,speaker=None):
-        self.mic=mic; self.speaker=speaker; self.rate=48000; self.run=False; self.m=[]; self.s=[]; self.muted=False
-        self.silence_started=None; self.level=0.0
-    def is_silent(self):
-        if not self.m or not self.s: return False
-        try:
-            m=np.concatenate(self.m[-4:])[:,0]
-            ss=np.concatenate(self.s[-4:])[:,0]
-            if len(m)==0 or len(ss)==0: return False
-            rms=max(float(np.sqrt(np.mean(m*m))),float(np.sqrt(np.mean(ss*ss))))
-            return rms < 0.003
-        except Exception: return False
-    def set_mute(self,value): self.muted=value
-    def start(self):
-        self.run=True
-        self.silence_started=None
-        mic=sc.get_microphone(self.mic,include_loopback=False) if self.mic else sc.default_microphone()
-        sp=sc.get_speaker(self.speaker) if self.speaker else sc.default_speaker()
-        loop=sc.get_microphone(id=str(sp.id),include_loopback=True)
-        def rec(dev,out,is_mic=False):
-            try:
-                with dev.recorder(samplerate=self.rate,channels=1) as r:
-                    while self.run:
-                        block=r.record(int(self.rate*.25))
-                        if is_mic and self.muted: block=np.zeros_like(block)
-                        out.append(block)
-                        try:
-                            lv=float(np.sqrt(np.mean(block*block)))
-                            self.level=max(self.level*0.35,min(1.0,lv*8.0))
-                        except Exception: pass
-            except Exception: pass
-        threading.Thread(target=rec,args=(mic,self.m,True),daemon=True).start()
-        threading.Thread(target=rec,args=(loop,self.s,False),daemon=True).start()
-    def stop(self,path,source_path=None):
-        self.run=False; time.sleep(.6)
-        if not self.m or not self.s: return None
-        m=np.concatenate(self.m)[:,0]; s=np.concatenate(self.s)[:,0]; n=min(len(m),len(s))
-        m=m[:n].astype(np.float32); s=s[:n].astype(np.float32)
-        # Исходник сохраняем раздельно: L=микрофон, R=системный звук.
-        if source_path:
-            sf.write(str(source_path),np.column_stack((m,s)),self.rate,subtype="PCM_16")
-            sp=Path(source_path)
-            sf.write(str(sp.with_name(sp.stem.replace("_source","_mic")+".wav")),m,self.rate,subtype="PCM_16")
-            sf.write(str(sp.with_name(sp.stem.replace("_source","_system")+".wav")),s,self.rate,subtype="PCM_16")
-        # Для обычного прослушивания оба источника должны быть слышны в обоих ушах.
-        mix=(m+s)/2.0
-        peak=float(np.max(np.abs(mix))) if len(mix) else 0.0
-        if peak>0.98: mix=mix*(0.98/peak)
-        sf.write(str(path),np.column_stack((mix,mix)),self.rate,subtype="PCM_16")
-        return path
-
-MEETING_PROCS=("zoom.exe","ms-teams.exe","teams.exe","webex.exe","webexmta.exe","skype.exe")
-TITLE_KEYS=("zoom meeting","zoom meeting controls","microsoft teams","teams meeting","google meet","meet.google.com","webex","yandex telemost","яндекс телемост","телемост","webex meeting","конференция","conference call")
-
-def windows_meeting_title():
-    found=[]; user32=ctypes.windll.user32; kernel32=ctypes.windll.kernel32
-    EnumProc=ctypes.WINFUNCTYPE(ctypes.c_bool,ctypes.c_void_p,ctypes.c_void_p)
-    def cb(hwnd,lparam):
-        if not user32.IsWindowVisible(hwnd): return True
-        buf=ctypes.create_unicode_buffer(512); user32.GetWindowTextW(hwnd,buf,512); title=buf.value.strip()
-        if not title: return True
-        pid=ctypes.c_ulong(); user32.GetWindowThreadProcessId(hwnd,ctypes.byref(pid)); process=""
-        h=kernel32.OpenProcess(0x1000|0x0010,False,pid.value)
-        if h:
-            pbuf=ctypes.create_unicode_buffer(512); size=ctypes.c_ulong(512)
-            if kernel32.QueryFullProcessImageNameW(h,0,pbuf,ctypes.byref(size)): process=Path(pbuf.value).name.lower()
-            kernel32.CloseHandle(h)
-        low=title.lower()
-        if process in ("meetinghub.exe","meetinghub-debug.exe"): return True
-        if process in MEETING_PROCS or any(k in low for k in TITLE_KEYS): found.append((title,process))
-        return True
-    user32.EnumWindows(EnumProc(cb),0); return found[0] if found else None
-
-def tray_image(recording=False,muted=False):
-    img=Image.new("RGBA",(64,64),(25,29,38,255)); d=ImageDraw.Draw(img)
-    d.rounded_rectangle((22,10,42,39),8,fill=(230,235,245,255))
-    d.arc((15,25,49,53),0,180,fill=(230,235,245,255),width=4); d.line((32,48,32,56),fill=(230,235,245,255),width=4); d.line((23,57,41,57),fill=(230,235,245,255),width=4)
-    if recording:
-        d.ellipse((46,5,60,19),fill=(220,65,65,255))
-    if muted:
-        d.line((10,10,54,54),fill=(220,65,65,255),width=5)
-    return img
-
-class Review(tk.Toplevel):
-    def __init__(self,parent,data,save):
-        super().__init__(parent); self.title("Проверка встречи"); self.geometry("850x620"); self.grab_set(); self.data=data; self.save=save
-        f=ttk.Frame(self,padding=15); f.pack(fill="both",expand=True)
-        ttk.Label(f,text="Тезисы встречи").pack(anchor="w")
-        self.points=tk.Text(f,height=10); self.points.pack(fill="x",pady=(3,12)); self.points.insert("1.0","\n".join(data.get("points",[]) or []))
-        ttk.Label(f,text="Задачи: задача | ответственный | срок").pack(anchor="w")
-        self.tasks=tk.Text(f,height=10); self.tasks.pack(fill="both",expand=True,pady=(3,8))
-        for x in data.get("tasks",[]) or []: self.tasks.insert("end",f"{x.get('task','')} | {x.get('owner','')} | {x.get('deadline','')}\n")
-        if data.get("ai_error"): ttk.Label(f,text="⚠ "+data.get("error","AI недоступен"),foreground="#c65").pack(anchor="w",pady=5)
-        ttk.Button(f,text="✓ Сохранить встречу",command=self.apply).pack(anchor="e",pady=8)
-    def apply(self):
-        d=dict(self.data); d["points"]=[clean(x) for x in self.points.get("1.0","end").splitlines() if clean(x)]; d["tasks"]=[]
-        for line in self.tasks.get("1.0","end").splitlines():
-            p=[x.strip() for x in line.split("|")]
-            if p and p[0]: d["tasks"].append({"task":p[0],"owner":p[1] if len(p)>1 else "","deadline":p[2] if len(p)>2 else ""})
-        self.save(d); self.destroy()
-
-class AudioPlayer(tk.Frame):
-    def __init__(self,parent,path):
-        super().__init__(parent)
-        self.path=str(path or ""); self.alias="MeetingHubAudio"; self.playing=False; self.duration=0; self.position=0
-        self.scale=ttk.Scale(self,from_=0,to=100,orient="horizontal",command=self.seek)
-        self.scale.pack(side="left",fill="x",expand=True,padx=(0,8))
-        self.time_label=ttk.Label(self,text="00:00 / 00:00",width=13); self.time_label.pack(side="left",padx=(0,8))
-        ttk.Button(self,text="▶",width=4,command=self.play).pack(side="left",padx=2)
-        ttk.Button(self,text="Ⅱ",width=4,command=self.pause).pack(side="left",padx=2)
-        ttk.Button(self,text="■",width=4,command=self.stop).pack(side="left",padx=2)
-        self.after(250,self.update)
-    def cmd(self,cmd,buf=None,size=0):
-        return ctypes.windll.winmm.mciSendStringW(cmd,buf,size,None)
-    def open_audio(self):
-        if not Path(self.path).exists():
-            messagebox.showerror("Запись","Файл записи не найден."); return False
-        self.cmd(f"close {self.alias}")
-        p=self.path.replace('"','')
-        if self.cmd(f'open "{p}" type waveaudio alias {self.alias}')!=0:
-            messagebox.showerror("Запись","Не удалось открыть запись."); return False
-        buf=ctypes.create_unicode_buffer(64); self.cmd(f"status {self.alias} length",buf,64)
-        try: self.duration=int(buf.value or 0)
-        except: self.duration=0
-        self.scale.configure(to=max(1,self.duration)); return True
-    def play(self):
-        if self.position<=0 and not self.playing:
-            if not self.open_audio(): return
-        self.cmd(f"play {self.alias} from {int(self.position)}"); self.playing=True
-    def pause(self):
-        if self.playing: self.cmd(f"pause {self.alias}"); self.playing=False
-    def stop(self):
-        self.cmd(f"stop {self.alias}"); self.position=0; self.playing=False; self.scale.set(0)
-    def seek(self,value):
-        try:
-            self.position=int(float(value))
-            if self.playing: self.cmd(f"play {self.alias} from {self.position}")
-        except: pass
-    def update(self):
-        try:
-            if self.playing:
-                buf=ctypes.create_unicode_buffer(64); self.cmd(f"status {self.alias} position",buf,64)
-                self.position=int(buf.value or 0)
-                if self.duration and self.position>=self.duration: self.stop()
-            self.scale.set(self.position)
-            self.time_label.config(text=f"{self.position//60000:02d}:{(self.position//1000)%60:02d} / {self.duration//60000:02d}:{(self.duration//1000)%60:02d}")
-        except: pass
-        try: self.after(250,self.update)
-        except: pass
-    def destroy(self):
-        try: self.cmd(f"stop {self.alias}"); self.cmd(f"close {self.alias}")
-        except: pass
-        super().destroy()
-
-
-class MeetingDetail(tk.Frame):
-    def __init__(self,parent,m,on_back=None):
-        super().__init__(parent,bg="#101218")
-        self.on_back=on_back
-        self.app=parent.winfo_toplevel()
-        self.meeting_id=m["id"]
-        self.audio_path=m["audio"] or ""
-
-        # Верхняя шапка и нижняя панель действий фиксированы.
-        f=ttk.Frame(self,padding=18); f.pack(fill="both",expand=True)
-        header=ttk.Frame(f); header.pack(fill="x",side="top")
-        ttk.Button(header,text="← К встречам",command=self.go_back).pack(anchor="w",pady=(0,8))
-        title_row=ttk.Frame(header); title_row.pack(fill="x",anchor="w")
-        self.title_label=ttk.Label(title_row,text=m["title"] or "Без названия",font=("Segoe UI",18,"bold")); self.title_label.pack(side="left")
-        ttk.Button(title_row,text="✎ Изменить название",command=self.edit_title).pack(side="left",padx=(12,0))
-        ttk.Label(header,text=f"{m['started'][:16]}   •   {m['project'] or 'Без проекта'}").pack(anchor="w",pady=(2,10))
-
-        footer=ttk.Frame(f); footer.pack(fill="x",side="bottom",pady=(8,0))
-        ttk.Separator(f,orient="horizontal").pack(fill="x",side="bottom",before=footer)
-        ttk.Label(footer,text="Запись",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(7,2))
-        player=ttk.Frame(footer); player.pack(fill="x",pady=(0,7))
-        self.audio_player=AudioPlayer(player,self.audio_path); self.audio_player.pack(fill="x")
-        actions=ttk.Frame(footer); actions.pack(fill="x")
-        ttk.Button(actions,text="📁 Открыть папку",command=lambda:open_recordings_folder()).pack(side="left")
-        self.retry_btn=ttk.Button(actions,text="↻ Повторить транскрибацию",command=self.retry_transcription)
-        if m["status"] in ("transcribing","transcription_queued","transcription_error") or not (m["transcript"] or "").strip():
-            self.retry_btn.pack(side="left",padx=(8,0))
-        self.retry_ai_btn=ttk.Button(actions,text="✨ Сформировать тезисы и задачи",command=self.retry_ai_analysis)
-        if (m["transcript"] or "").strip() and not has_points(m["points"]):
-            self.retry_ai_btn.pack(side="left",padx=(8,0))
-        ttk.Button(actions,text="🗑 Удалить встречу",command=lambda:self.delete_meeting(m["id"])).pack(side="right")
-
-        # Скроллится только содержимое встречи, а не вся страница.
-        content=ttk.Frame(f)
-        content.pack(fill="both",expand=True,side="top")
-        canvas=tk.Canvas(content,bg="#f0f0f0",highlightthickness=0,bd=0)
-        scrollbar=ttk.Scrollbar(content,orient="vertical",command=canvas.yview)
-        inner=ttk.Frame(canvas)
-        inner_window=canvas.create_window((0,0),window=inner,anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left",fill="both",expand=True)
-        scrollbar.pack(side="right",fill="y")
-        def on_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.itemconfigure(inner_window,width=canvas.winfo_width())
-        inner.bind("<Configure>",on_configure)
-        canvas.bind("<Configure>",lambda e:canvas.itemconfigure(inner_window,width=e.width))
-
-        ttk.Label(inner,text="Тезисы",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(0,2))
-        t=tk.Text(inner,height=6,wrap="word")
-        t.pack(fill="x",pady=(0,10))
-        val=m["points"] or ""
-        try: val="\n".join(json.loads(val))
-        except Exception: pass
-        t.insert("1.0",val); t.config(state="disabled")
-
-        ttk.Label(inner,text="Задачи",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(0,2))
-        q=tk.Text(inner,height=5,wrap="word")
-        q.pack(fill="x",pady=(0,10))
-        c=db(); tasks=c.execute("select * from tasks where meeting_id=? order by id",(m["id"],)).fetchall(); c.close()
-        q.insert("1.0","\n".join(f"{x['task']} | {x['owner'] or ''} | {x['deadline'] or ''}" for x in tasks))
-        q.config(state="disabled")
-
-        ttk.Label(inner,text="Расшифровка",font=("Segoe UI",10,"bold")).pack(anchor="w",pady=(0,2))
-        tr=tk.Text(inner,height=18,wrap="word")
-        tr.pack(fill="both",expand=True)
-        tr.insert("1.0",m["transcript"] or "")
-        tr.config(state="disabled")
-
-        self.transcribe_action=ttk.Label(inner,text="",foreground="#666")
-        self.transcribe_action.pack(anchor="w",pady=(5,2))
-        self.transcribe_progress=ttk.Progressbar(inner,mode="indeterminate")
-        if m["status"]=="transcribing":
-            self.show_transcription_progress()
-        elif m["status"]=="transcription_queued":
-            self.transcribe_action.config(text="⏳ Транскрибация в очереди…")
-        elif m["status"]=="transcription_error":
-            self.transcribe_action.config(text="⚠ Транскрибация не завершилась. Можно запустить повторно.")
-        elif (m["transcript"] or "").strip() and not (m["points"] or "").strip():
-            self.after(300,self.auto_ai_if_needed)
-
-    def show_transcription_progress(self):
-        self.transcribe_action.config(text="⏳ Идёт транскрибация. Можно продолжать пользоваться программой.")
-        if not self.transcribe_progress.winfo_ismapped():
-            self.transcribe_progress.pack(anchor="w",fill="x",pady=(0,6))
-        self.transcribe_progress.start(12)
-        if hasattr(self,"retry_btn"):
-            self.retry_btn.config(text="⏳ Идёт транскрибация…",state="disabled")
-
-    def edit_title(self):
-        c=db(); row=c.execute("select title from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
-        current=(row["title"] if row else "") or "Без названия"
-        w=tk.Toplevel(self); w.title("Название встречи"); w.geometry("520x150"); w.transient(self.winfo_toplevel()); w.grab_set()
-        ttk.Label(w,text="Название встречи").pack(anchor="w",padx=15,pady=(15,5))
-        v=tk.StringVar(value=current)
-        e=ttk.Entry(w,textvariable=v); e.pack(fill="x",padx=15); e.focus_set(); e.select_range(0,"end")
-        def save():
-            title=v.get().strip() or "Без названия"
-            c=db(); c.execute("update meetings set title=? where id=?",(title,self.meeting_id)); c.commit(); c.close()
-            self.title_label.config(text=title)
-            w.destroy()
-        ttk.Button(w,text="Сохранить",command=save).pack(anchor="e",padx=15,pady=12)
-        e.bind("<Return>",lambda e:save()); w.bind("<Escape>",lambda e:w.destroy())
-
-    def go_back(self):
-        if self.on_back: self.on_back()
-
-    def source_path(self,path):
-        if not path: return ""
-        p=Path(path)
-        return str(p.with_name(p.stem+"_source.wav"))
-
-    def track_path(self,path,kind):
-        if not path: return ""
-        p=Path(path)
-        return str(p.with_name(p.stem+"_"+kind+".wav"))
-
-    def delete_meeting(self,meeting_id):
-        if not messagebox.askyesno("Удалить встречу","Удалить встречу, расшифровку, задачи и все связанные аудиофайлы?\n\nЭто действие нельзя отменить."):
-            return
-        try:
-            c=db()
-            row=c.execute("select audio from meetings where id=?",(meeting_id,)).fetchone()
-            if row:
-                audio=row["audio"]
-                paths=[audio,self.source_path(audio),self.track_path(audio,"mic"),self.track_path(audio,"system")]
-                c.execute("delete from tasks where meeting_id=?",(meeting_id,))
-                c.execute("delete from meetings where id=?",(meeting_id,))
-                c.commit()
-                c.close()
-                for path in paths:
-                    if path:
-                        try: Path(path).unlink(missing_ok=True)
-                        except Exception: pass
-            else:
-                c.close()
-            self.go_back()
-        except Exception as e:
-            try: c.rollback(); c.close()
-            except Exception: pass
-            messagebox.showerror("Удаление встречи","Не удалось удалить встречу:\n"+str(e))
-
-    def auto_ai_if_needed(self):
-        if getattr(self.app,"processing",False):
-            return
-        c=db()
-        row=c.execute("select transcript,project,points,audio from meetings where id=?",(self.meeting_id,)).fetchone()
-        c.close()
-        if not row or not (row["transcript"] or "").strip():
-            return
-        # Задач может не быть по итогам встречи. Критерий готовности AI — наличие тезисов.
-        if has_points(row["points"]):
-            return
-        self.transcribe_action.config(text="⏳ Тезисы не найдены — AI запускается автоматически…")
-        self.app.pending_meeting_id=self.meeting_id
-        self.app.last_recording=Path(row["audio"]) if row["audio"] else None
-        self.app.processing=True
-        self.app.start_ai_job(self.meeting_id,row["transcript"],row["project"] or "")
-
-    def retry_ai_analysis(self):
-        c=db(); row=c.execute("select transcript,project,title,audio from meetings where id=?",(self.meeting_id,)).fetchone(); c.close()
-        if not row or not (row["transcript"] or "").strip():
-            messagebox.showinfo("AI-анализ","Сначала дождитесь расшифровки встречи.")
-            return
-        tr=row["transcript"]
-        project=row["project"] or ""
-        self.app.pending_meeting_id=self.meeting_id
-        self.app.last_recording=Path(row["audio"]) if row["audio"] else None
-        self.app.processing=True
-        if hasattr(self,"retry_ai_btn"):
-            self.retry_ai_btn.config(text="⏳ Формирую тезисы и задачи…",state="disabled")
-        self.transcribe_action.config(text="⏳ AI формирует тезисы и задачи…")
-        self.app.start_ai_job(self.meeting_id,tr,project)
-
-    def retry_transcription(self):
-        audio=self.audio_path
-        if not audio or not Path(audio).exists():
-            messagebox.showerror("Транскрибация","Файл записи не найден.")
-            return
-        source=self.source_path(audio)
-        if not Path(source).exists():
-            source=audio
-        c=db()
-        c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",self.meeting_id))
-        c.commit(); c.close()
-        self.app.pending_meeting_id=self.meeting_id
-        self.app.last_recording=Path(audio)
-        self.app.processing=True
-        self.app.status.set("Расшифровка выполняется в фоне…")
-        self.show_transcription_progress()
-        self.app.start_transcription_job(self.meeting_id,Path(audio),Path(source))
-
-def open_recordings_folder():
-    RECORDINGS.mkdir(exist_ok=True)
-    try: os.startfile(str(RECORDINGS))
-    except Exception: pass
-
-class AutoDetector:
-    def __init__(self,app): self.app=app; self.run=True; self.pending=False; threading.Thread(target=self.loop,daemon=True).start()
-    def loop(self):
-        while self.run:
-            try:
-                hit=windows_meeting_title()
-                if not hit:
-                    self.app.force_stop_lock=False
-                if self.app.auto_enabled and hit and not self.app.rec and not self.pending and not self.app.force_stop_lock:
-                    self.pending=True; self.app.after(0,lambda h=hit:self._start(h))
-                elif self.app.rec and self.app.auto_mode and not self.app.processing:
-                    if not hit:
-                        self.app.after(0,self.app.auto_stop)
-                    elif self.app.rec.is_silent():
-                        if self.app.rec.silence_started is None:
-                            self.app.rec.silence_started=time.time()
-                        elif time.time()-self.app.rec.silence_started >= 90:
-                            self.app.after(0,self.app.auto_stop)
-                    else:
-                        self.app.rec.silence_started=None
-            except Exception: pass
-            time.sleep(2)
-    def _start(self,hit):
-        self.pending=False
-        if not self.app.rec: self.app.auto_start(hit[0])
-
-class MeetingHubTrayIcon(pystray.Icon):
-    """Tray icon: show the context menu on both left and right mouse clicks."""
-    def _on_notify(self,wparam,lparam):
-        try:
-            from pystray._util import win32 as _pystray_win32
-            if lparam in (_pystray_win32.WM_LBUTTONUP,_pystray_win32.WM_RBUTTONUP):
-                lparam=_pystray_win32.WM_RBUTTONUP
-        except Exception:
-            pass
-        return super()._on_notify(wparam,lparam)
-
-
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__(); self.title("Meeting Hub — v"+VERSION); self.geometry("1050x700"); self.configure(bg="#101218")
-        self.rec=None; self.started=None; self.auto_mode=False; self.auto_enabled=True; self.processing=False; self.mic_muted=False; self.last_recording=None; self.force_stop_lock=False; self.pending_meeting_id=None
-        self.active_transcriptions=set(); self.active_ai=set(); self.transcription_queue=[]; self.ai_queue=[]; self.transcription_queued=set(); self.ai_queued=set()
-        self.project=tk.StringVar(); self.titlev=tk.StringVar(value="Новая встреча"); self.status=tk.StringVar(value="☁ Облачный AI: "+("готов" if get_groq_key() else "не настроен"))
-        self.countdown_window=None; self.countdown_after=None; self.countdown_value=0; self.countdown_title=""
-        self.recording_overlay=None; self.overlay_after=None; self.overlay_hidden=False
-        self.build(); self.setup_tray(); self.detector=AutoDetector(self); self.protocol("WM_DELETE_WINDOW",self.hide_to_tray)
-        self.after(2500,self.recover_pending_work)
-        self.after(300000,self.recover_pending_work)
-    def build(self):
-        left=tk.Frame(self,bg="#151820",width=190); left.pack(side="left",fill="y"); left.pack_propagate(False)
-        tk.Label(left,text="MEETING",bg="#151820",fg="white",font=("Segoe UI",11,"bold")).pack(pady=(25,0)); tk.Label(left,text="HUB",bg="#151820",fg="#7c8cff",font=("Segoe UI",20,"bold")).pack(pady=(0,2))
-        tk.Label(left,text="v"+VERSION,bg="#151820",fg="#6f7787",font=("Segoe UI",9)).pack(pady=(0,12))
-        self.update_label=tk.Label(left,text="",bg="#151820",fg="#6fe0a1",font=("Segoe UI",9),cursor="hand2",wraplength=160,justify="left")
-        self.update_label.pack(fill="x",padx=18,pady=(0,8))
-        for name,cmd in [("Главная",self.home),("Новая встреча",self.new),("Встречи",self.meetings),("Задачи",self.tasks),("📥 Загрузить запись",self.import_recording),("☁ Настроить облачный AI",self.cloud_settings),("Проверить обновления",self.check_updates_now)]:
-            tk.Button(left,text=name,command=cmd,anchor="w",bg="#151820",fg="#b0b7c5",bd=0,padx=20,pady=10).pack(fill="x")
-        self.home()
-        threading.Thread(target=self.check_updates_background,daemon=True).start()
-    def cloud_settings(self):
-        w=tk.Toplevel(self); w.title("Бесплатный облачный AI"); w.geometry("620x250"); w.transient(self); w.grab_set()
-        ttk.Label(w,text="Groq API — бесплатный режим",font=("Segoe UI",12,"bold")).pack(anchor="w",padx=18,pady=(18,6))
-        ttk.Label(w,text="Groq используется для транскрибации и тезисов. Платные сервисы не подключаются.").pack(anchor="w",padx=18)
-        v=tk.StringVar(value=get_groq_key()); e=ttk.Entry(w,textvariable=v,show="•"); e.pack(fill="x",padx=18,pady=12); e.focus_set()
-        ttk.Label(w,text="Ключ хранится локально. При превышении бесплатного лимита Groq вернёт ошибку, и Meeting Hub не будет переходить на платную обработку.",foreground="#666",wraplength=560).pack(anchor="w",padx=18)
-        def save():
-            cfg=load_config(); cfg["groq_api_key"]=v.get().strip(); save_config(cfg); w.destroy(); self.status.set("☁ Облачный AI: "+("готов" if get_groq_key() else "не настроен")); self.home()
-        ttk.Button(w,text="Сохранить",command=save).pack(anchor="e",padx=18,pady=15)
-        e.bind("<Return>",lambda e:save()); w.bind("<Escape>",lambda e:w.destroy())
-
-    def check_updates_background(self):
-        try:
-            url="https://raw.githubusercontent.com/Valentin812/meeting-hub/main/app.py"
-            req=urllib.request.Request(url,headers={"User-Agent":"MeetingHub"})
-            remote=urllib.request.urlopen(req,timeout=5).read().decode("utf-8","ignore")
-            m=re.search(r'VERSION="([^"]+)"',remote)
-            if m and self.version_tuple(m.group(1))>self.version_tuple(VERSION):
-                rv=m.group(1)
-                self.after(0,lambda:self.show_update_notice(rv))
-        except Exception:
-            pass
-    def version_tuple(self,v):
-        try: return tuple(int(x) for x in v.split("."))
-        except: return (0,)
-    def show_update_notice(self,remote):
-        if not hasattr(self,"update_label"): return
-        self.update_label.config(text=f"🟢 Доступна новая версия {remote}\nНажмите для проверки",fg="#6fe0a1")
-        self.update_label.bind("<Button-1>",lambda e:self.check_updates_now())
-    def check_updates_now(self):
-        self.update_label.config(text="Проверяю обновления…",fg="#c7ccd6")
-        threading.Thread(target=self._check_updates_now,daemon=True).start()
-    def _check_updates_now(self):
-        try:
-            url="https://raw.githubusercontent.com/Valentin812/meeting-hub/main/app.py"
-            req=urllib.request.Request(url,headers={"User-Agent":"MeetingHub"})
-            remote=urllib.request.urlopen(req,timeout=5).read().decode("utf-8","ignore")
-            m=re.search(r'VERSION="([^"]+)"',remote)
-            rv=m.group(1) if m else VERSION
-            if self.version_tuple(rv)>self.version_tuple(VERSION):
-                self.after(0,lambda:self.show_update_notice(rv))
-                self.after(0,lambda:messagebox.showinfo("Обновление Meeting Hub",f"Доступна новая версия {rv}.\n\nПока обновление нужно установить новым установщиком."))
-            else:
-                self.after(0,lambda:self.update_label.config(text="✓ У вас последняя версия",fg="#7f8898"))
-        except Exception:
-            self.after(0,lambda:self.update_label.config(text="Не удалось проверить обновления",fg="#d78b8b"))
-    def import_recording(self):
-        path=filedialog.askopenfilename(title="Выберите запись встречи",filetypes=[
-            ("Аудио/видео","*.wav *.mp3 *.m4a *.flac *.ogg *.mp4 *.webm"),
-            ("Все файлы","*.*")])
-        if not path: return
-        src=Path(path)
-        if not src.exists(): return
-        try:
-            stamp=datetime.now().strftime("%Y%m%d_%H%M%S")
-            dst=RECORDINGS/f"{stamp}_{src.name}"
-            shutil.copy2(src,dst)
-            now=datetime.now().isoformat(timespec="seconds")
-            title=src.stem[:120] or "Импортированная встреча"
-            c=db()
-            c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",
-                      (title,"",now,str(dst),"","","","",json.dumps([],ensure_ascii=False),"transcribing"))
-            mid=c.execute("select last_insert_rowid()").fetchone()[0]
-            c.commit(); c.close()
-            self.status.set("Запись загружена. Расшифровка выполняется…")
-            self.meetings()
-            # Для внешнего файла передаём сам исходник: faster-whisper умеет читать WAV/MP3/M4A/FLAC/OGG.
-            # Если это стерео с разными каналами — transcribe_stereo сохранит таймкоды и разделение по каналам.
-            self.start_transcription_job(mid,Path(dst),Path(dst))
-        except Exception as e:
-            messagebox.showerror("Загрузка записи","Не удалось загрузить запись:\n"+str(e))
-
-
-    def setup_tray(self):
-        # Только основные действия — без списка последних записей и версии.
-        menu=pystray.Menu(
-            pystray.MenuItem(lambda item:self.tray_status(),lambda icon,item:False),
-            pystray.MenuItem(lambda item:"✓ Автоподключение включено" if self.auto_enabled else "○ Автоподключение выключено",self.toggle_auto),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem(lambda item:"▶ Принудительно начать запись",self.tray_start,enabled=lambda item:self.rec is None and self.countdown_window is None and not self.processing),
-            pystray.MenuItem(lambda item:"■ Принудительно остановить запись",self.tray_stop,enabled=lambda item:self.rec is not None),
-            pystray.MenuItem(lambda item:"🔇 Включить микрофон" if self.mic_muted else "🔇 Выключить микрофон",self.tray_mute,enabled=lambda item:self.rec is not None),
-            pystray.MenuItem("📁 Открыть записи",lambda icon,item:open_recordings_folder()),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Открыть Meeting Hub",lambda icon,item:self.show_window()),
-            pystray.MenuItem("Выйти",lambda icon,item:self.quit_app())
-        )
-        self.icon=MeetingHubTrayIcon("MeetingHub",tray_image(), "Meeting Hub v"+VERSION,menu)
-        try:
-            self.icon.run_detached()
-        except Exception:
-            threading.Thread(target=self.icon.run,daemon=True).start()
-    def toggle_auto(self,icon,item):
-        self.after(0,self.toggle_auto_enabled)
-    def toggle_auto_enabled(self):
-        self.auto_enabled=not self.auto_enabled
-        if not self.auto_enabled: self.auto_mode=False
-        self.refresh_tray()
-        self.status.set("Автоподключение: " + ("включено" if self.auto_enabled else "выключено"))
-        self.home()
-    def tray_status(self):
-        if self.rec: return ("🔴 Запись идёт" + (" • микрофон выключен" if self.mic_muted else ""))
-        return "⚪ Ожидание встречи"
-    def _recording_action(self,path):
-        def action(icon,item):
-            try: os.startfile(str(path))
-            except Exception: pass
-        return action
-    def recording_items(self):
-        files=sorted(RECORDINGS.glob("*.wav"),key=lambda p:p.stat().st_mtime,reverse=True)[:8]
-        if not files: return [pystray.MenuItem("Записей пока нет",lambda i,j:None,enabled=False)]
-        return [pystray.MenuItem(p.name,self._recording_action(p)) for p in files]
-    def refresh_tray(self):
-        try:
-            self.icon.icon=tray_image(bool(self.rec),self.mic_muted)
-            self.icon.title=self.tray_status()
-            self.icon.update_menu()
-        except Exception: pass
-    def clear(self):
-        for x in self.main.winfo_children(): x.destroy()
-    def home(self):
-        if not hasattr(self,"main"): self.main=tk.Frame(self,bg="#101218"); self.main.pack(fill="both",expand=True)
-        self.clear(); tk.Label(self.main,text="Meeting Hub",bg="#101218",fg="white",font=("Segoe UI",24,"bold")).pack(anchor="w",padx=30,pady=30)
-        c=db(); n=c.execute("select count(*) n from meetings").fetchone()["n"]; t=c.execute("select count(*) n from tasks where status='open'").fetchone()["n"]; c.close()
-        tk.Label(self.main,text=f"Встреч: {n}    Открытых задач: {t}",bg="#101218",fg="#9ba3b3",font=("Segoe UI",12)).pack(anchor="w",padx=30)
-        tk.Label(self.main,text="● Автоподключение к встречам включено",bg="#101218",fg="#45d19a").pack(anchor="w",padx=30,pady=(18,0))
-        tk.Label(self.main,text="☁ AI: Groq (бесплатный режим)"+(" • настроен" if get_groq_key() else " • требуется API-ключ"),bg="#101218",fg="#9ba3b3").pack(anchor="w",padx=30,pady=(8,0))
-        tk.Label(self.main,text="Запись управляется из системного трея: остановить запись или выключить микрофон можно прямо там.",bg="#101218",fg="#9ba3b3",wraplength=800,justify="left").pack(anchor="w",padx=30,pady=(10,0))
-        ttk.Button(self.main,text="＋ Новая встреча",command=self.new).pack(anchor="w",padx=30,pady=25)
-    def new(self):
-        self.clear(); f=tk.Frame(self.main,bg="#101218"); f.pack(fill="both",expand=True,padx=30,pady=25); tk.Label(f,text="Новая встреча",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w")
-        for lab,var in [("Название",self.titlev),("Проект",self.project)]:
-            tk.Label(f,text=lab,bg="#101218",fg="#aab2c2").pack(anchor="w",pady=(18,4)); tk.Entry(f,textvariable=var,bg="#1b202a",fg="white",insertbackground="white",bd=0).pack(fill="x",ipady=9)
-        tk.Label(f,text="Meeting Hub автоматически обнаружит открытую встречу и начнёт запись.",bg="#101218",fg="#9ba3b3").pack(anchor="w",pady=20); tk.Label(f,textvariable=self.status,bg="#101218",fg="#45d19a").pack(anchor="w")
-        self.rec_btn=tk.Button(f,text="● НАЧАТЬ ЗАПИСЬ",command=self.toggle,bg="#7c8cff",fg="white",bd=0,padx=20,pady=12); self.rec_btn.pack(anchor="w",pady=12)
-    def show_window(self): self.deiconify(); self.lift(); self.focus_force()
-    def hide_to_tray(self): self.withdraw()
-    def show_recording_overlay(self):
-        self.overlay_hidden=False
-        if self.recording_overlay:
-            self.recording_overlay.deiconify(); self.recording_overlay.lift(); return
-        w=tk.Toplevel(self); self.recording_overlay=w
-        w.overrideredirect(True); w.attributes("-topmost",True); w.configure(bg="#181a20")
-        w.bind("<Enter>",lambda e:self.set_overlay_expanded(True))
-        w.bind("<Leave>",lambda e:self.set_overlay_expanded(False))
-        body=tk.Frame(w,bg="#181a20",padx=10,pady=7); body.pack()
-        self.overlay_dot=tk.Label(body,text="●",bg="#181a20",fg="#20a8d8",font=("Segoe UI",13,"bold")); self.overlay_dot.pack(side="left",padx=(0,6))
-        self.overlay_bars=tk.Canvas(body,width=54,height=22,bg="#181a20",highlightthickness=0); self.overlay_bars.pack(side="left")
-        self.overlay_timer=tk.Label(body,text="00:00",bg="#181a20",fg="#d8dce5",font=("Segoe UI",9,"bold")); self.overlay_timer.pack(side="left",padx=7)
-        self.overlay_controls=tk.Frame(body,bg="#181a20")
-        self.overlay_mute=tk.Label(self.overlay_controls,text="🎤",bg="#181a20",fg="#d8dce5",font=("Segoe UI",11),padx=7,pady=2,cursor="hand2")
-        self.overlay_mute.bind("<ButtonRelease-1>",lambda e:self.toggle_mute())
-        self.overlay_mute.pack(side="left")
-        self.overlay_stop=tk.Label(self.overlay_controls,text="■",bg="#e84b55",fg="white",font=("Segoe UI",10,"bold"),padx=8,pady=3,cursor="hand2")
-        self.overlay_stop.bind("<ButtonRelease-1>",lambda e:self.force_stop_recording())
-        self.overlay_stop.pack(side="left",padx=3)
-        self.overlay_close=tk.Label(self.overlay_controls,text="×",bg="#181a20",fg="#8d93a0",font=("Segoe UI",12),padx=5,pady=1,cursor="hand2")
-        self.overlay_close.bind("<ButtonRelease-1>",lambda e:self.hide_recording_overlay())
-        self.overlay_close.pack(side="left")
-        self.set_overlay_expanded(False)
-        w.update_idletasks(); self.position_overlay(); self.update_overlay()
-
-    def position_overlay(self):
-        if not self.recording_overlay: return
-        self.recording_overlay.update_idletasks()
-        sw=self.recording_overlay.winfo_screenwidth()
-        self.recording_overlay.geometry(f"+{max(10,sw-self.recording_overlay.winfo_width()-18)}+18")
-
-    def set_overlay_expanded(self,value):
-        if not self.recording_overlay: return
-        if value: self.overlay_controls.pack(side="left")
-        else: self.overlay_controls.pack_forget()
-        self.position_overlay()
-
-    def hide_recording_overlay(self):
-        self.overlay_hidden=True
-        if self.recording_overlay: self.recording_overlay.withdraw()
-
-    def destroy_recording_overlay(self):
-        if self.overlay_after:
-            try: self.after_cancel(self.overlay_after)
-            except Exception: pass
-        self.overlay_after=None
-        if self.recording_overlay:
-            try: self.recording_overlay.destroy()
-            except Exception: pass
-        self.recording_overlay=None
-
-    def update_overlay(self):
-        if not self.recording_overlay or not self.rec: return
-        try:
-            sec=int((datetime.now()-self.started).total_seconds()) if self.started else 0
-            self.overlay_timer.config(text=f"{sec//60:02d}:{sec%60:02d}")
-            self.overlay_mute.config(text="🔇" if self.mic_muted else "🎤")
-            c=self.overlay_bars; c.delete("all"); level=getattr(self.rec,"level",0.0)
-            vals=[max(2,min(20,int(level*(i+1)/6*20)+2)) for i in range(6)]
-            for i,h in enumerate(vals): c.create_rectangle(i*9+1,22-h,i*9+7,22,fill="#20a8d8",outline="")
-        except Exception: pass
-        self.overlay_after=self.after(200,self.update_overlay)
-
-    def start_recording(self,title=None,auto=False):
-        if self.rec: return
-        try:
-            self.rec=Recorder(); self.rec.start(); self.started=datetime.now(); self.auto_mode=auto; self.processing=False
-            if title: self.titlev.set(title[:120])
-            self.status.set("🔴 Идёт запись" + (" • автоматически" if auto else ""))
-            if hasattr(self,"rec_btn"): self.rec_btn.config(text="■ ОСТАНОВИТЬ")
-            self.show_recording_overlay()
-            self.refresh_tray()
-        except Exception as e: self.rec=None; messagebox.showerror("Аудио",str(e))
-    def auto_start(self,title):
-        self.after(0,lambda:self.start_countdown(title))
-    def start_countdown(self,title):
-        if self.rec or self.processing or self.countdown_window is not None: return
-        self.countdown_title=title or "Встреча"
-        self.countdown_value=5
-        self.pending=False
-        try:
-            w=tk.Toplevel(self)
-            self.countdown_window=w
-            w.overrideredirect(True)
-            w.attributes("-topmost",True)
-            w.configure(bg="#17191f")
-            frame=tk.Frame(w,bg="#17191f",padx=14,pady=9)
-            frame.pack()
-            tk.Label(frame,text="◉",bg="#17191f",fg="#45b7e8",font=("Segoe UI",14,"bold")).pack(side="left",padx=(0,8))
-            self.countdown_label=tk.Label(frame,text="",bg="#17191f",fg="white",font=("Segoe UI",10,"bold"))
-            self.countdown_label.pack(side="left")
-            cancel_lbl=tk.Label(frame,text="Отмена",bg="#343842",fg="white",font=("Segoe UI",9,"bold"),padx=12,pady=4,cursor="hand2")
-            cancel_lbl.bind("<ButtonRelease-1>",lambda e:self.cancel_countdown())
-            cancel_lbl.pack(side="left",padx=(14,0))
-            w.update_idletasks()
-            sw=w.winfo_screenwidth()
-            x=max(10,sw-w.winfo_width()-18)
-            w.geometry(f"+{x}+18")
-            self._countdown_tick()
-        except Exception:
-            self.countdown_window=None
-            self.start_recording(title,True)
-
-    def _countdown_tick(self):
-        w=self.countdown_window
-        if w is None: return
-        if not windows_meeting_title():
-            self._close_countdown()
-            self.force_stop_lock=False
-            self.status.set("Встреча не обнаружена")
-            return
-        self.countdown_label.config(text=f"{self.countdown_title} — запись через {self.countdown_value}")
-        if self.countdown_value<=1:
-            self._close_countdown()
-            self.start_recording(self.countdown_title,True)
-            return
-        self.countdown_value-=1
-        self.countdown_after=self.after(1000,self._countdown_tick)
-
-    def cancel_countdown(self):
-        self._close_countdown()
-        self.force_stop_lock=True
-        self.status.set("Запись отменена")
-        self.refresh_tray()
-
-    def _close_countdown(self):
-        if self.countdown_after:
-            try: self.after_cancel(self.countdown_after)
-            except Exception: pass
-        self.countdown_after=None
-        if self.countdown_window:
-            try: self.countdown_window.destroy()
-            except Exception: pass
-        self.countdown_window=None
-
-    def toggle(self):
-        if not self.rec: self.start_recording()
-        else: self.stop_recording()
-    def auto_stop(self): self.stop_recording()
-    def tray_start(self,icon,item): self.after(0,self.force_start_recording)
-    def force_start_recording(self):
-        if self.rec or self.processing: return
-        self._close_countdown()
-        self.force_stop_lock=False
-        self.start_recording(self.titlev.get() or "Новая встреча",False)
-    def tray_stop(self,icon,item): self.after(0,self.force_stop_recording)
-    def force_stop_recording(self):
-        if not self.rec or self.processing: return
-        self.force_stop_lock=True
-        self.auto_mode=False
-        self.stop_recording()
-    def tray_mute(self,icon,item):
-        self.after(0,self.toggle_mute)
-    def toggle_mute(self):
-        if not self.rec: return
-        self.mic_muted=not self.mic_muted; self.rec.set_mute(self.mic_muted)
-        self.status.set("🔴 Идёт запись • " + ("микрофон выключен" if self.mic_muted else "микрофон включён"))
-        self.refresh_tray()
-    def stop_recording(self):
-        if not self.rec or self.processing: return
-        self.destroy_recording_overlay()
-        self.processing=True; p=RECORDINGS/(datetime.now().strftime("%Y%m%d_%H%M%S")+".wav"); r=self.rec; self.rec=None; self.auto_mode=False; self.mic_muted=False
-        if hasattr(self,"rec_btn"): self.rec_btn.config(text="Обработка…",state="disabled")
-        self.refresh_tray()
-        source_p=RECORDINGS/(p.stem+"_source.wav"); result=r.stop(p,source_p); self.last_recording=result
-        if not result:
-            self.processing=False; self.status.set("Запись не сохранена"); self.meetings(); return
-        try:
-            c=db(); now=datetime.now().isoformat(timespec="seconds"); project=self.project.get() or ""; title=self.titlev.get() or "Новая встреча"
-            c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
-            c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",(title,project,now,str(result),"","","","",json.dumps([],ensure_ascii=False),"transcribing"))
-            mid=c.execute("select last_insert_rowid()").fetchone()[0]; self.pending_meeting_id=mid; c.commit(); c.close()
-        except Exception as e:
-            self.processing=False; messagebox.showerror("Сохранение встречи","Не удалось создать запись встречи в базе данных:\n"+str(e)); return
-        self.status.set("Встреча сохранена. Расшифровка выполняется в фоне…")
-        try: self.icon.notify("Встреча сохранена","Расшифровка выполняется в фоне")
-        except Exception: pass
-        self.start_transcription_job(mid,result,source_p)
-
-    def start_transcription_job(self,mid,result,source_p):
-        if mid in self.active_transcriptions or mid in self.transcription_queued:
-            return False
-        self.transcription_queue.append((mid,result,source_p))
-        self.transcription_queued.add(mid)
-        try:
-            c=db(); c.execute("update meetings set status=? where id=?",("transcription_queued",mid)); c.commit(); c.close()
-        except Exception: pass
-        self._pump_transcription_queue()
-        return True
-
-    def _pump_transcription_queue(self):
-        if self.active_transcriptions or not self.transcription_queue:
-            return
-        mid,result,source_p=self.transcription_queue.pop(0)
-        self.transcription_queued.discard(mid)
-        self.active_transcriptions.add(mid)
-        try:
-            c=db(); c.execute("update meetings set status=?,transcript=? where id=?",("transcribing","",mid)); c.commit(); c.close()
-        except Exception: pass
-        threading.Thread(target=self._transcription_job_wrapper,args=(mid,result,source_p),daemon=True).start()
-
-    def _transcription_job_wrapper(self,mid,result,source_p):
-        try:
-            self.process_meeting_background(mid,result,source_p)
-        finally:
-            self.active_transcriptions.discard(mid)
-            try: self.after(100,self._pump_transcription_queue)
-            except Exception: pass
-
-    def process_meeting_background(self,mid,result,source_p):
-        # Транскрибация работает в отдельном worker-потоке с watchdog.
-        # Если faster-whisper завис/застрял на повреждённом файле, встреча больше
-        # не будет висеть бесконечно в статусе "Транскрибация…".
-        tr=""; err=""
-        started=time.time()
-        for attempt in range(1,4):
-            try:
-                box={"text":None,"error":None}
-                def worker():
-                    try:
-                        box["text"]=transcribe_stereo(source_p)
-                    except Exception as e:
-                        box["error"]=str(e)
-                th=threading.Thread(target=worker,daemon=True)
-                th.start()
-                # Максимум 20 минут на одну попытку. Это с запасом для длинной
-                # встречи на CPU, но не позволяет зависшему Whisper блокировать UI.
-                while th.is_alive() and time.time()-started < 20*60:
-                    elapsed=int(time.time()-started)
-                    if elapsed % 10 == 0:
-                        self.after(0,lambda e=elapsed:self.status.set(f"Расшифровка выполняется… {e//60:02d}:{e%60:02d}"))
-                    time.sleep(1)
-                if th.is_alive():
-                    err="Превышено время ожидания транскрибации (20 минут)."
-                    break
-                if box["error"]:
-                    err=box["error"]; tr=""
-                else:
-                    tr=box["text"] or ""
-                if tr and not tr.startswith("[Ошибка транскрибации:"):
-                    break
-                err=tr or err or "Транскрибация не вернула текст."
-                if attempt<3:
-                    self.after(0,lambda n=attempt:self.status.set(f"Расшифровка: повторная попытка {n+1}/3…"))
-                    time.sleep(15*attempt)
-            except Exception as e:
-                err=str(e); tr=""
-                if attempt<3: time.sleep(15*attempt)
-        if not tr or tr.startswith("[Ошибка транскрибации:"):
-            self.after(0,lambda e=err:self.finish_transcription_failure(mid,e)); return
-        try:
-            c=db(); c.execute("update meetings set transcript=?,status=? where id=?",(tr,"transcribed",mid)); c.commit(); c.close()
-        except Exception: pass
-        self.after(0,lambda:self.finish_transcription_success(mid,tr))
-
-    def finish_transcription_failure(self,mid,error):
-        self.processing=False; self.pending_meeting_id=None; self.refresh_tray()
-        try:
-            c=db(); c.execute("update meetings set transcript=?,status=? where id=?",(error or "[Расшифровка не выполнена]","transcription_error",mid)); c.commit(); c.close()
-        except Exception: pass
-        if hasattr(self,"rec_btn"): self.rec_btn.config(text="● НАЧАТЬ ЗАПИСЬ",state="normal")
-        self.status.set("Расшифровка пока не удалась. Встреча сохранена.")
-        self.meetings()
-
-    def finish_transcription_success(self,mid,tr):
-        project=self.project.get()
-        self.start_ai_job(mid,tr,project)
-        self.status.set("Расшифровка готова. Формирую тезисы и задачи…")
-    def start_ai_job(self,mid,tr,project):
-        if mid in self.active_ai or mid in self.ai_queued:
-            return False
-        self.ai_queue.append((mid,tr,project))
-        self.ai_queued.add(mid)
-        self._pump_ai_queue()
-        return True
-
-    def _pump_ai_queue(self):
-        if self.active_ai or not self.ai_queue:
-            return
-        mid,tr,project=self.ai_queue.pop(0)
-        self.ai_queued.discard(mid)
-        self.active_ai.add(mid)
-        self.pending_meeting_id=mid
-        threading.Thread(target=self._ai_job_wrapper,args=(mid,tr,project),daemon=True).start()
-
-    def _ai_job_wrapper(self,mid,tr,project):
-        try:
-            self.process_ai_background(mid,tr,project)
-        finally:
-            self.active_ai.discard(mid)
-            try: self.after(100,self._pump_ai_queue)
-            except Exception: pass
-
-    def process_ai_background(self,mid,tr,project):
-        data={}
-        for attempt in range(1,3):
-            data=ai_analyze(tr,project)
-            points=data.get("points") if isinstance(data,dict) else None
-            if points:
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                response.close()
+                raise InterruptedError("Анализ остановлен для встречи.")
+            line = response.readline()
+            if not line:
                 break
-            if attempt<2:
-                time.sleep(5)
-        self.after(0,lambda d=data:self.finish_ai(mid,tr,d))
+            part = json.loads(line.decode("utf-8"))
+            if part.get("error"):
+                raise RuntimeError(part["error"])
+            text = part.get("message", {}).get("content", "")
+            if text:
+                chunks.append(text)
+            if part.get("done"):
+                break
+    finally:
+        response.close()
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("Анализ остановлен для встречи.")
+    content = "".join(chunks)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, re.S)
+        if not match:
+            raise ValueError("Модель вернула ответ, который не удалось прочитать как JSON.")
+        return json.loads(match.group(0))
 
-    def recover_pending_work(self):
-        # После перезапуска программы продолжаем незавершённые операции автоматически.
+def list_models():
+    req = urllib.request.Request("http://localhost:11434/api/tags")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return [x.get("name", "") for x in json.loads(r.read().decode("utf-8")).get("models", [])]
+
+
+MEETING_PROCESS_NAMES = {
+    "zoom.exe", "ms-teams.exe", "teams.exe", "msteams.exe", "webex.exe",
+    "webexhost.exe", "skype.exe", "slack.exe", "discord.exe", "gotomeeting.exe",
+    "ringcentral.exe", "telemost.exe", "trueconf.exe", "viber.exe",
+    "zoom workplace.exe", "avaya.exe"
+}
+BROWSER_PROCESS_NAMES = {"chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "browser.exe", "vivaldi.exe"}
+
+def inspect_audio_sessions():
+    """Return (status, active_sessions, error). status=True/False/None."""
+    try:
+        import psutil
+        from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+        active_sessions = []
+        for session in AudioUtilities.GetAllSessions():
+            try:
+                if session.State != 1 or session._ctl is None:
+                    continue
+                meter = session._ctl.QueryInterface(IAudioMeterInformation)
+                peak = float(meter.GetPeakValue())
+                if peak < 0.008:
+                    continue
+                pid = getattr(session, "ProcessId", 0)
+                name = "system / unknown"
+                if pid:
+                    try:
+                        name = psutil.Process(pid).name()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        name = f"PID {pid}"
+                active_sessions.append((name, peak, pid))
+            except Exception:
+                continue
+        return True, active_sessions, ""
+    except Exception as e:
+        return None, [], str(e)
+
+class MicrophoneActivityMonitor:
+    """Continuously measures microphone level locally; does not save or transmit audio."""
+    def __init__(self):
+        self.available = False
+        self.level = 0.0
+        self.error = ""
+        self.stream = None
+        self.lock = threading.Lock()
+
+    def start(self):
         try:
-            c=db()
-            rows=c.execute("select id,audio,transcript,project,status,points from meetings where status in ('transcribing','transcription_error','transcribed','approved') or ((transcript is not null and trim(transcript)<>'') and (points is null or trim(points)='' or trim(points) in ('[]','null'))) order by id").fetchall()
-            c.close()
-            for row in rows:
-                mid=row["id"]; audio=row["audio"] or ""; status=row["status"] or ""
-                if status in ("transcribing","transcription_queued","transcription_error"):
-                    if mid not in self.active_transcriptions and audio and Path(audio).exists():
-                        source=Path(audio).with_name(Path(audio).stem+"_source.wav")
-                        if not source.exists(): source=Path(audio)
-                        self.start_transcription_job(mid,Path(audio),source)
-                elif (row["transcript"] or "").strip():
-                    points=(row["points"] or "").strip()
-                    if (not points or points in ("[]","null")) and mid not in self.active_ai:
-                        self.start_ai_job(mid,row["transcript"],row["project"] or "")
+            import sounddevice as sd
+            def callback(indata, frames, time_info, status):
+                try:
+                    # RMS only; audio samples are discarded immediately.
+                    sq = 0.0
+                    count = len(indata) * (len(indata[0]) if len(indata) else 1)
+                    for row in indata:
+                        for sample in row:
+                            sq += float(sample) * float(sample)
+                    rms = math.sqrt(sq / max(count, 1))
+                    with self.lock:
+                        self.level = rms
+                        self.available = True
+                except Exception:
+                    pass
+            self.stream = sd.InputStream(channels=1, samplerate=16000, blocksize=1600, callback=callback)
+            self.stream.start()
+            self.available = True
+            return True
+        except Exception as e:
+            self.error = str(e)
+            self.available = False
+            return False
+
+    def is_voice_active(self):
+        with self.lock:
+            return self.available and self.level >= 0.012
+
+    def close(self):
+        try:
+            if self.stream is not None:
+                self.stream.stop()
+                self.stream.close()
         except Exception:
             pass
-        try: self.after(60000,self.recover_pending_work)
-        except Exception: pass
 
-    def finish_ai(self,mid,tr,data):
-        if data.get("ai_error") or not data.get("points"):
-            self.processing=False; self.pending_meeting_id=mid; self.refresh_tray()
-            if hasattr(self,"rec_btn"): self.rec_btn.config(text="● НАЧАТЬ ЗАПИСЬ",state="normal")
-            self.status.set("Расшифровка готова. AI пока не сформировал тезисы и задачи. При открытии встречи попробую снова.")
-            self.meetings(); return
-        self.processing=False
-        self.pending_meeting_id=mid
-        if self.last_recording is None:
-            try:
-                c=db(); row=c.execute("select audio from meetings where id=?",(mid,)).fetchone(); c.close()
-                if row and row["audio"]: self.last_recording=Path(row["audio"])
-            except Exception: pass
-        if hasattr(self,"retry_ai_btn"):
-            try: self.retry_ai_btn.destroy()
-            except Exception: pass
-        # AI-результат сохраняем автоматически. Пользователь может потом изменить название встречи.
-        self.save_meeting(data,self.last_recording,tr)
 
-    def review(self,data,path,tr):
-        # Показываем пользователю результат локального AI перед записью тезисов и задач.
-        Review(self,data,lambda d:self.save_meeting(d,path,tr))
+class ChromeMicRegistryMonitor:
+    """Watch Windows microphone-consent registry notifications and emit new Chrome starts.
+    This is evidence of Chrome microphone access, not proof that a call started.
+    """
+    def __init__(self):
+        self.events = __import__('queue').Queue()
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
 
-    def save_meeting(self,d,path,tr):
-        c=db(); project=d.get("project") or self.project.get() or ""; now=datetime.now().isoformat(timespec="seconds"); title=d.get("title") or self.titlev.get()
+    def _run(self):
         try:
-            mid=self.pending_meeting_id
-            if mid:
-                c.execute("update meetings set title=?,project=?,transcript=?,points=?,status=? where id=?",(title,project,tr,json.dumps(d.get("points",[]),ensure_ascii=False),"approved",mid))
-                c.execute("delete from tasks where meeting_id=?",(mid,))
-            else:
-                c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
-                c.execute("insert into meetings(title,project,started,audio,transcript,summary,decisions,questions,points,status) values(?,?,?,?,?,?,?,?,?,?)",(title,project,now,str(path),tr,"","","",json.dumps(d.get("points",[]),ensure_ascii=False),"approved"))
-                mid=c.execute("select last_insert_rowid()").fetchone()[0]
-            c.execute("insert or ignore into projects(name,summary,created) values(?,?,?)",(project,"",now))
-            for x in d.get("tasks",[]) or []:
-                c.execute("insert into tasks(meeting_id,project,task,owner,deadline,status,created) values(?,?,?,?,?,?,?)",(mid,project,x.get("task",""),x.get("owner",""),x.get("deadline",""),"open",now))
-            c.commit(); c.close(); self.pending_meeting_id=None; self.status.set("Встреча сохранена")
-            self.meetings()
-            try: self.icon.notify("Встреча сохранена",f"{title} • {path.name}")
-            except Exception: pass
+            import ctypes, winreg
+            roots = [
+                (winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged', 'HKCU_NonPackaged'),
+                (winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone', 'HKCU_Microphone'),
+            ]
+            KEY_READ = 0x20019
+            REG_NOTIFY_CHANGE_NAME = 0x1
+            REG_NOTIFY_CHANGE_LAST_SET = 0x4
+            advapi = ctypes.WinDLL('Advapi32.dll', use_last_error=True)
+            notify = advapi.RegNotifyChangeKeyValue
+            notify.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+            notify.restype = ctypes.c_long
+
+            def snapshot():
+                out = {}
+                for root, path, prefix in roots:
+                    try:
+                        with winreg.OpenKey(root, path, 0, KEY_READ) as top:
+                            def rec(k, subpath='', depth=0):
+                                if depth > 12: return
+                                vals = {}
+                                i = 0
+                                while True:
+                                    try: n, v, typ = winreg.EnumValue(k, i)
+                                    except OSError: break
+                                    if n.lower() in ('lastusedtimestart','lastusedtimestop','value'):
+                                        vals[n.lower()] = v
+                                    i += 1
+                                keyname = (prefix + '\\' + subpath).lower()
+                                if 'lastusedtimestart' in vals and 'chrome.exe' in keyname:
+                                    out[keyname] = (vals.get('lastusedtimestart'), vals.get('lastusedtimestop'))
+                                j = 0
+                                while True:
+                                    try: child = winreg.EnumKey(k, j)
+                                    except OSError: break
+                                    try:
+                                        with winreg.OpenKey(k, child, 0, KEY_READ) as ck:
+                                            rec(ck, subpath + ('\\' if subpath else '') + child, depth+1)
+                                    except OSError: pass
+                                    j += 1
+                            rec(top)
+                    except OSError:
+                        pass
+                return out
+
+            baseline = snapshot()
+            self.events.put(('ready', 'Монитор доступа Chrome к микрофону запущен.'))
+            # Separate watcher per root; Windows notifies on changes below the watched tree.
+            def watch(root, path, prefix):
+                try: key = winreg.OpenKey(root, path, 0, KEY_READ)
+                except OSError as e:
+                    self.events.put(('error', f'Не удалось наблюдать реестр {prefix}: {e}')); return
+                handle = ctypes.c_void_p(int(key))
+                nonlocal baseline
+                while not self.stop_event.is_set():
+                    event = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
+                    if not event:
+                        self.events.put(('error', 'Не удалось создать событие Windows для мониторинга реестра.')); break
+                    rc = notify(handle, 1, REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET, event, True)
+                    if rc != 0:
+                        ctypes.windll.kernel32.CloseHandle(event); time.sleep(1); continue
+                    wait = ctypes.windll.kernel32.WaitForSingleObject(event, 700)
+                    ctypes.windll.kernel32.CloseHandle(event)
+                    if wait == 0:
+                        current = snapshot()
+                        for k, value in current.items():
+                            old = baseline.get(k)
+                            if not isinstance(value, tuple):
+                                continue
+                            start, stop = value
+                            old_start, old_stop = old if isinstance(old, tuple) else (None, None)
+                            # Windows keeps historical LastUsedTime* values. Only treat a
+                            # changed start timestamp as a live access if it is genuinely recent;
+                            # otherwise app startup / stale registry notifications can look like a call.
+                            if start not in (None, 0, b'', '') and start != old_start:
+                                is_recent = False
+                                try:
+                                    from datetime import datetime, timezone, timedelta
+                                    raw = str(start).replace('Z', '+00:00')
+                                    if raw.isdigit():
+                                        # Windows registry LastUsedTime* is commonly FILETIME:
+                                        # 100-ns ticks since 1601-01-01 UTC.
+                                        stamp = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=int(raw) / 10)
+                                    else:
+                                        stamp = datetime.fromisoformat(raw)
+                                        if stamp.tzinfo is None:
+                                            stamp = stamp.replace(tzinfo=timezone.utc)
+                                    age = abs((datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds())
+                                    is_recent = age <= 20
+                                except Exception:
+                                    is_recent = False
+                                # A newly created Chrome registry key can be the first real mic-access
+                                # record for this profile. Accept it only when the start timestamp is
+                                # fresh (<=10 sec) and there is no newer stop marker. This avoids stale
+                                # startup history without silently discarding first-time Chrome access.
+                                if is_recent and (stop in (None, 0, b'', '') or stop == old_stop):
+                                    self.events.put(('chrome_mic_start', {'key': k, 'timestamp': str(start)}))
+                            if stop not in (None, 0, b'', '') and stop != old_stop and old is not None:
+                                self.events.put(('chrome_mic_stop', {'key': k, 'timestamp': str(stop)}))
+                        baseline = current
+                    elif wait not in (0x102,):
+                        time.sleep(.2)
+                winreg.CloseKey(key)
+            workers = []
+            for root, path, prefix in roots:
+                t = threading.Thread(target=watch, args=(root,path,prefix), daemon=True)
+                t.start(); workers.append(t)
+            while not self.stop_event.is_set(): time.sleep(.2)
         except Exception as e:
-            try: c.rollback(); c.close()
+            self.events.put(('error', f'Монитор доступа к микрофону не запущен: {e}'))
+
+    def poll(self):
+        out=[]
+        while True:
+            try: out.append(self.events.get_nowait())
+            except Exception: break
+        return out
+
+    def close(self):
+        self.stop_event.set()
+
+
+def detect_meeting(mic_monitor=None):
+    """Return direct evidence only; the UI watcher adds persistence/hysteresis."""
+    try:
+        import psutil
+        running = set()
+        for proc in psutil.process_iter(["name"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name:
+                    running.add(name)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except Exception as e:
+        return None, "Не удалось проверить процессы Windows: " + str(e)
+
+    active, sessions, error = inspect_audio_sessions()
+    # Browser audio is not proof of a meeting: music, videos, notifications, or idle tabs
+    # can create active Chrome audio sessions. Chrome meeting detection is handled separately
+    # by the fresh registry-start signal above.
+    session_names = [s[0].lower() for s in sessions]
+    matches = sorted(set(name for name in session_names if name in MEETING_PROCESS_NAMES))
+    if matches:
+        return True, "Обнаружен звук приложения для встреч: " + ", ".join(matches)
+
+    candidates = sorted(running & MEETING_PROCESS_NAMES)
+    if candidates and mic_monitor is not None and mic_monitor.is_voice_active():
+        return "mic", "Активность микрофона при открытом приложении для встреч: " + ", ".join(candidates)
+
+    if active is None:
+        return None, "Не удалось проверить аудиосессии Windows."
+    if sessions:
+        return False, "Звук есть, но он не связан с распознанным приложением для встреч."
+    if candidates:
+        return False, "Приложение встречи/браузер открыто; жду подтверждения звука или речи."
+    return False, "Активная встреча не обнаружена."
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        root.title("Meeting Hub v4.9 — обновлённое обучение")
+        root.geometry("1360x900")
+        self.project_path = ""
+        self.transcript_path = ""
+        self.settings_path = Path(__file__).with_name("meeting_hub_settings.json")
+        self.training_path = Path(__file__).with_name("meeting_hub_training.json")
+        self.training_data = self.load_training_data()
+        self.last_logged_state = None
+        self.current_training_event_id = None
+        self.registry_seen_events = set()
+        self._dedupe_training_feedback()
+        self.settings = self.load_settings()
+        self.pending_app_decision = None
+        self.chrome_stop_since = None
+        self.data = {"summary": [], "decisions": [], "tasks": [], "open_questions": [], "uncertain_fragments": []}
+
+        header = ttk.Frame(root, padding=10); header.pack(fill="x")
+        ttk.Label(header, text="MEETING HUB", font=("Segoe UI", 18, "bold")).pack(side="left")
+        ttk.Button(header, text="Открыть TXT", command=self.open_txt).pack(side="right")
+        ttk.Button(header, text="Сохранить проект", command=self.save_project).pack(side="right", padx=5)
+        ttk.Button(header, text="Открыть проект", command=self.open_project).pack(side="right", padx=5)
+
+        meta = ttk.LabelFrame(root, text="Встреча", padding=8); meta.pack(fill="x", padx=10, pady=(0,8))
+        ttk.Label(meta, text="Название").grid(row=0,column=0,sticky="w")
+        self.name=ttk.Entry(meta,width=38); self.name.grid(row=0,column=1,sticky="ew",padx=5)
+        ttk.Label(meta,text="Дата").grid(row=0,column=2,sticky="w")
+        self.date=ttk.Entry(meta,width=15); self.date.insert(0,datetime.now().strftime("%Y-%m-%d")); self.date.grid(row=0,column=3,padx=5)
+        ttk.Label(meta,text="Модель Ollama").grid(row=0,column=4,sticky="w")
+        self.model=ttk.Entry(meta,width=24); self.model.insert(0,DEFAULT_MODEL); self.model.grid(row=0,column=5,padx=5)
+        ttk.Button(meta,text="Проверить Ollama",command=self.check_ollama).grid(row=0,column=6,padx=5)
+        meta.columnconfigure(1,weight=1)
+
+        livebar = ttk.Frame(root, padding=(12, 0, 12, 4))
+        livebar.pack(fill="x")
+        self.auto_pause = tk.BooleanVar(value=True)
+        ttk.Checkbutton(livebar, text="Автоматически останавливать ИИ при обнаружении встречи",
+                        variable=self.auto_pause, command=self.toggle_auto_pause).pack(side="left")
+        ttk.Button(livebar, text="Встреча завершена", command=self.release_meeting_guard).pack(side="left", padx=8)
+        self.meeting_active = False
+        self.mic_monitor = MicrophoneActivityMonitor()
+        self.mic_monitor.start()
+        self.chrome_mic_monitor = ChromeMicRegistryMonitor()
+        self.chrome_mic_countdown_until = None
+        self.chrome_mic_countdown_reason = ""
+        self.mic_active_since = None
+        self.mic_quiet_since = None
+        self.meeting_latched = False
+        self.analysis_cancel = threading.Event()
+        self.analysis_running = False
+        self.pending_transcript = None
+        self.status = ttk.Label(root, text="Проверка активных встреч…", padding=(12,0,12,8))
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.status.pack(fill="x")
+        nb=ttk.Notebook(root); nb.pack(fill="both",expand=True,padx=10,pady=4)
+        self.tab_trans=ttk.Frame(nb,padding=8); self.tab_summary=ttk.Frame(nb,padding=8)
+        self.tab_dec=ttk.Frame(nb,padding=8); self.tab_tasks=ttk.Frame(nb,padding=8); self.tab_questions=ttk.Frame(nb,padding=8); self.tab_training=ttk.Frame(nb,padding=8)
+        nb.add(self.tab_trans,text="Расшифровка"); nb.add(self.tab_summary,text="Резюме")
+        nb.add(self.tab_dec,text="Решения"); nb.add(self.tab_tasks,text="Задачи"); nb.add(self.tab_questions,text="Открытые вопросы"); nb.add(self.tab_training,text="Обучение")
+        self.trans=tk.Text(self.tab_trans,wrap="word",font=("Segoe UI",10)); self.trans.pack(fill="both",expand=True)
+        tbar=ttk.Frame(self.tab_trans); tbar.pack(fill="x",pady=5)
+        ttk.Button(tbar,text="Открыть TXT",command=self.open_txt).pack(side="left")
+        self.analyze_btn=ttk.Button(tbar,text="Сформировать итоги локально",command=self.analyze); self.analyze_btn.pack(side="left",padx=6)
+        self.analyze_btn.config(state="disabled")
+        self.root.after(1500, self.meeting_watch_tick)
+        self.summary=tk.Text(self.tab_summary,wrap="word",font=("Segoe UI",10)); self.summary.pack(fill="both",expand=True)
+        self.dec_tree=self.make_tree(self.tab_dec,[("text","Решение",650),("evidence","Фрагмент-основание",500)])
+        self.task_tree=self.make_tree(self.tab_tasks,[("task","Задача",450),("owner","Ответственный",130),("deadline","Срок",100),("confidence","Уверенность",90),("status","Статус",130),("evidence","Фрагмент-основание",350)])
+        taskbar=ttk.Frame(self.tab_tasks); taskbar.pack(fill="x",pady=5)
+        ttk.Button(taskbar,text="Подтвердить выбранную",command=lambda:self.task_status("Подтверждена")).pack(side="left")
+        ttk.Button(taskbar,text="Отклонить выбранную",command=lambda:self.task_status("Отклонена")).pack(side="left",padx=5)
+        ttk.Button(taskbar,text="Экспорт CSV",command=self.export_tasks).pack(side="right")
+        self.q_tree=self.make_tree(self.tab_questions,[("question","Открытый вопрос",650),("evidence","Фрагмент-основание",500)])
+        ttk.Label(root,text="ИИ формирует черновик. Проверяйте решения, поручения, имена, суммы и сроки по записи.",padding=10).pack(fill="x")
+        self.build_training_panel()
+
+    def load_training_data(self):
+        try:
+            data = json.loads(self.training_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("events", [])
+                data.setdefault("feedback", [])
+                data.setdefault("app_rules", {})
+                return data
+        except Exception:
+            pass
+        return {"events": [], "feedback": [], "app_rules": {}}
+
+    def _dedupe_training_feedback(self):
+        """Remove duplicate feedback caused by the two Windows registry views."""
+        seen = set()
+        unique = []
+        for item in self.training_data.get("feedback", []):
+            detail = str(item.get("detail", ""))
+            # Registry events in both views share the same Windows timestamp.
+            match = re.search(r"timestamp['\"]?\s*:\s*['\"]?(\d+)", detail)
+            identity = (item.get("label"), item.get("source"), item.get("event"), match.group(1) if match else item.get("event_id"))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            unique.append(item)
+        self.training_data["feedback"] = unique
+
+    def _learn_app_rule_from_feedback(self, event, label):
+        """Build a cautious Chrome rule only from distinct microphone START events.
+        A microphone STOP event is never treated as evidence that a meeting started.
+        """
+        if str(event.get("source", "")) != "Google Chrome":
+            return
+        if "Доступ к микрофону начался" not in str(event.get("event", "")):
+            return
+        positives, negatives = set(), set()
+        for sample in self.training_data.get("feedback", []):
+            if sample.get("source") != "Google Chrome":
+                continue
+            if "Доступ к микрофону начался" not in str(sample.get("event", "")):
+                continue
+            detail = str(sample.get("detail", ""))
+            match = re.search(r"timestamp['\"]?\s*:\s*['\"]?(\d+)", detail)
+            identity = match.group(1) if match else sample.get("event_id")
+            if identity is None:
+                continue
+            if sample.get("label") == "meeting": positives.add(identity)
+            elif sample.get("label") == "not_meeting": negatives.add(identity)
+        if len(positives) >= 2 and len(positives) > len(negatives):
+            self.training_data.setdefault("app_rules", {})["chrome.exe"] = "always"
+            self.status.config(text="Обучение: Chrome — микрофонный сигнал можно автоматически проверять как кандидата на встречу.")
+        elif len(negatives) >= 2 and len(negatives) >= len(positives):
+            self.training_data.setdefault("app_rules", {})["chrome.exe"] = "ask"
+            self.status.config(text="Обучение: для Chrome оставлен осторожный режим подтверждения.")
+
+    def save_training_data(self):
+        try:
+            self.training_path.write_text(json.dumps(self.training_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.training_summary.config(text=f"Сохранено примеров: {len(self.training_data['feedback'])} · событий: {len(self.training_data['events'])}")
+        except Exception as e:
+            messagebox.showerror("Обучение", f"Не удалось сохранить данные: {e}")
+
+    def build_training_panel(self):
+        intro = ttk.LabelFrame(self.tab_training, text="Подтверждение событий", padding=8)
+        intro.pack(fill="x", pady=(0, 8))
+        ttk.Label(intro, text="Отмечай, что происходило на самом деле. Примеры сохраняются локально рядом с программой; сами веса ИИ-модели не меняются.", wraplength=1100).pack(anchor="w")
+        bar = ttk.Frame(intro); bar.pack(fill="x", pady=(8, 0))
+        ttk.Button(bar, text="Встреча началась сейчас", command=self.manual_meeting_start).pack(side="left", padx=(0, 5))
+        ttk.Button(bar, text="Встреча завершилась", command=self.release_meeting_guard).pack(side="left", padx=5)
+        ttk.Button(bar, text="Экспорт примеров JSON", command=self.export_training).pack(side="right")
+        self.training_tree = ttk.Treeview(self.tab_training, columns=("time", "source", "event", "detail", "feedback"), show="headings", height=13)
+        for col, label, width in [("time","Время",145),("source","Источник",120),("event","Событие",180),("detail","Детали",540),("feedback","Метка",150)]:
+            self.training_tree.heading(col, text=label); self.training_tree.column(col, width=width, anchor="w")
+        self.training_tree.pack(fill="both", expand=True)
+        actions = ttk.Frame(self.tab_training); actions.pack(fill="x", pady=8)
+        ttk.Button(actions, text="Это была встреча", command=lambda: self.label_training_event("meeting")).pack(side="left", padx=(0,5))
+        ttk.Button(actions, text="Это НЕ была встреча", command=lambda: self.label_training_event("not_meeting")).pack(side="left", padx=5)
+        ttk.Button(actions, text="Встреча пропущена", command=self.label_missed_meeting).pack(side="left", padx=5)
+        ttk.Button(actions, text="Правило для приложения…", command=self.configure_app_rule).pack(side="left", padx=5)
+        self.training_summary = ttk.Label(self.tab_training, text="События и подтверждения сохраняются на этом компьютере.")
+        self.training_summary.pack(anchor="w", pady=(0, 4))
+        for event in self.training_data.get("events", [])[-250:]:
+            self._insert_training_row(event)
+        self.training_summary.config(text=f"Сохранено примеров: {len(self.training_data['feedback'])} · событий: {len(self.training_data['events'])}")
+
+    def _insert_training_row(self, event):
+        if not hasattr(self, "training_tree"):
+            return
+        iid = self.training_tree.insert("", "end", values=(event.get("time", ""), event.get("source", ""), event.get("event", ""), event.get("detail", ""), event.get("feedback", "")))
+        self.training_tree.selection_set(iid)
+        self.training_tree.see(iid)
+        self.current_training_event_id = event.get("id")
+
+    def record_training_event(self, source, event, detail):
+        item = {"id": f"{int(time.time()*1000)}-{len(self.training_data['events'])}", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": source, "event": event, "detail": str(detail)[:500], "feedback": "Не размечено"}
+        self.training_data.setdefault("events", []).append(item)
+        self.training_data["events"] = self.training_data["events"][-1000:]
+        self._insert_training_row(item)
+        self.save_training_data()
+
+    def _selected_training_event(self):
+        selected = self.training_tree.selection() if hasattr(self, "training_tree") else ()
+        if not selected:
+            messagebox.showinfo("Обучение", "Сначала выбери событие в списке.")
+            return None
+        vals = self.training_tree.item(selected[0], "values")
+        return next((e for e in self.training_data.get("events", []) if e.get("time") == vals[0] and e.get("source") == vals[1] and e.get("event") == vals[2] and e.get("detail") == vals[3]), None)
+
+    def label_training_event(self, label):
+        event = self._selected_training_event()
+        if not event: return
+        event["feedback"] = "Встреча" if label == "meeting" else "Не встреча"
+        self.training_data.setdefault("feedback", []).append({"time": datetime.now().isoformat(timespec="seconds"), "event_id": event.get("id"), "source": event.get("source"), "event": event.get("event"), "detail": event.get("detail"), "label": label})
+        self._dedupe_training_feedback()
+        self._learn_app_rule_from_feedback(event, label)
+        self.save_training_data()
+        self.refresh_training_tree()
+
+    def label_missed_meeting(self):
+        event = {"id": f"{int(time.time()*1000)}-manual", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": "Ручная отметка", "event": "Пропущенная встреча", "detail": "Пользователь сообщил, что встреча шла, но автоматическое обнаружение не сработало.", "feedback": "Встреча пропущена"}
+        self.training_data.setdefault("events", []).append(event)
+        self.training_data.setdefault("feedback", []).append({"time": datetime.now().isoformat(timespec="seconds"), "event_id": event["id"], "source": event["source"], "event": event["event"], "detail": event["detail"], "label": "missed_meeting"})
+        self._insert_training_row(event); self.save_training_data()
+
+    def refresh_training_tree(self):
+        for row in self.training_tree.get_children(): self.training_tree.delete(row)
+        for event in self.training_data.get("events", [])[-250:]: self.training_tree.insert("", "end", values=(event.get("time", ""), event.get("source", ""), event.get("event", ""), event.get("detail", ""), event.get("feedback", "")))
+
+    def configure_app_rule(self):
+        win = tk.Toplevel(self.root); win.title("Правило приложения"); win.transient(self.root); win.grab_set()
+        ttk.Label(win, text="Имя процесса (например chrome.exe):", padding=10).pack(anchor="w")
+        name = ttk.Entry(win, width=35); name.insert(0, "chrome.exe"); name.pack(padx=10, fill="x")
+        current = tk.StringVar(value="ask")
+        ttk.Label(win, text="Что делать при обращении к микрофону?", padding=(10,5)).pack(anchor="w")
+        for value, label in [("ask", "Каждый раз спрашивать"), ("always", "Считать сигнал кандидатом на встречу"), ("never", "Игнорировать")]:
+            ttk.Radiobutton(win, text=label, value=value, variable=current).pack(anchor="w", padx=10)
+        def save_rule():
+            app = name.get().strip().lower()
+            if not app: return
+            self.training_data.setdefault("app_rules", {})[app] = current.get()
+            self.save_training_data(); win.destroy()
+            messagebox.showinfo("Правило сохранено", f"Правило для {app} сохранено локально. Оно фиксирует предпочтение; детектор будет подключать его по мере следующих улучшений.")
+        ttk.Button(win, text="Сохранить", command=save_rule).pack(pady=10)
+
+    def manual_meeting_start(self):
+        self.meeting_latched = True; self.meeting_active = True
+        self.last_meeting_reason = "Встреча подтверждена пользователем вручную"
+        # Link the manual confirmation to the nearest recent Chrome mic START.
+        # This creates a useful labeled sample rather than training on the manual button itself.
+        now = datetime.now()
+        linked = None
+        for candidate in reversed(self.training_data.get("events", [])):
+            if candidate.get("source") != "Google Chrome":
+                continue
+            if "Доступ к микрофону начался" not in str(candidate.get("event", "")):
+                continue
+            try:
+                age = (now - datetime.strptime(candidate.get("time", ""), "%Y-%m-%d %H:%M:%S")).total_seconds()
+            except Exception:
+                continue
+            if 0 <= age <= 120:
+                linked = candidate
+                break
+        if linked:
+            linked["feedback"] = "Встреча"
+            detail = str(linked.get("detail", ""))
+            match = re.search(r"timestamp['\"]?\s*:\s*['\"]?(\d+)", detail)
+            identity = match.group(1) if match else linked.get("id")
+            exists = any(
+                x.get("event_id") == linked.get("id") or
+                (x.get("source") == linked.get("source") and
+                 x.get("event") == linked.get("event") and
+                 x.get("detail") == linked.get("detail") and
+                 x.get("label") == "meeting")
+                for x in self.training_data.get("feedback", [])
+            )
+            if not exists:
+                self.training_data.setdefault("feedback", []).append({
+                    "time": datetime.now().isoformat(timespec="seconds"),
+                    "event_id": linked.get("id"), "source": linked.get("source"),
+                    "event": linked.get("event"), "detail": linked.get("detail"), "label": "meeting"
+                })
+            self._learn_app_rule_from_feedback(linked, "meeting")
+        self.record_training_event("Ручное управление", "Встреча подтверждена", self.last_meeting_reason)
+        self.save_training_data()
+        if self.auto_pause.get():
+            self.analyze_btn.config(state="disabled")
+        if linked:
+            self.status.config(text="Встреча включена вручную. Ближайшее событие начала микрофона Chrome сохранено как положительный пример.")
+            self.refresh_training_tree()
+        else:
+            self.status.config(text="Встреча включена вручную. Рядом не найдено недавнего события начала микрофона Chrome; отметка сохранена без привязки к приложению.")
+
+    def export_training(self):
+        p = filedialog.asksaveasfilename(defaultextension=".json", initialfile="MeetingHub_training.json", filetypes=[("JSON", "*.json")])
+        if p:
+            Path(p).write_text(json.dumps(self.training_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            messagebox.showinfo("Обучение", "Примеры экспортированы.")
+
+    def load_settings(self):
+        try:
+            data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("apps", {})
+                return data
+        except Exception:
+            pass
+        return {"apps": {}}
+
+    def save_settings(self):
+        try:
+            self.settings_path.write_text(json.dumps(self.settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            self.status.config(text=f"Не удалось сохранить настройки приложений: {e}")
+
+    def ask_app_policy(self, app_name, on_choice):
+        win = tk.Toplevel(self.root)
+        win.title("Настройка обнаружения встреч")
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        ttk.Label(win, text=f"Обнаружен доступ к микрофону: {app_name}", font=("Segoe UI", 11, "bold"), padding=(16, 14, 16, 6)).pack(anchor="w")
+        ttk.Label(win, text="Что делать, когда это приложение обращается к микрофону?", padding=(16, 0, 16, 12)).pack(anchor="w")
+        bar = ttk.Frame(win, padding=(12, 0, 12, 12)); bar.pack(fill="x")
+        def choose(value):
+            try: win.grab_release()
             except Exception: pass
-            messagebox.showerror("Сохранение встречи","Не удалось сохранить изменения:\n"+str(e))
-    def meetings(self):
-        self.clear(); tk.Label(self.main,text="Встречи",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w",padx=30,pady=25)
-        c=db(); rows=c.execute("select * from meetings order by id desc limit 50").fetchall(); c.close()
-        for m in rows:
-            row=tk.Frame(self.main,bg="#1b202a")
-            row.pack(fill="x",padx=30,pady=2)
-            tk.Button(row,text=f"{m['started'][:16]}  •  {m['title']}  •  {m['project'] or 'Без проекта'}",command=lambda x=m:self.show_meeting_detail(x),bg="#1b202a",fg="white",anchor="w",padx=15,pady=9,bd=0,activebackground="#252b38",activeforeground="white").pack(side="left",fill="x",expand=True)
-            status=m['status'] or ''
-            if status=='transcription_queued':
-                st='⏳ В очереди на транскрибацию…'
-            elif status=='transcribing':
-                st='⏳ Транскрибируется…'
-            elif status=='transcription_error':
-                st='⚠ Ошибка'
-            elif status in ('transcribed','approved'):
-                st='✓ Готово'
+            win.destroy()
+            on_choice(value)
+        ttk.Button(bar, text="Только в этот раз", command=lambda: choose("once")).pack(side="left", padx=3)
+        ttk.Button(bar, text="Всегда", command=lambda: choose("always")).pack(side="left", padx=3)
+        ttk.Button(bar, text="Никогда", command=lambda: choose("never")).pack(side="left", padx=3)
+        win.protocol("WM_DELETE_WINDOW", lambda: choose("never"))
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - win.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - win.winfo_height()) // 2)
+        win.geometry(f"+{x}+{y}")
+
+    def process_chrome_mic_start(self, payload):
+        learned_policy = self.training_data.get("app_rules", {}).get("chrome.exe", "ask")
+        if learned_policy == "never":
+            self.status.config(text="Chrome ignorируется по правилу панели обучения.")
+            return
+        if learned_policy == "always":
+            self.begin_meeting_countdown(payload)
+            return
+        policy = self.settings.get("apps", {}).get("chrome.exe")
+        if policy == "never":
+            self.status.config(text="Доступ Chrome к микрофону игнорируется по настройке «Никогда».")
+            return
+        if policy == "always":
+            self.begin_meeting_countdown(payload)
+            return
+        if self.pending_app_decision:
+            return
+        self.pending_app_decision = True
+        def decided(choice):
+            self.pending_app_decision = None
+            if choice in ("always", "never"):
+                self.settings.setdefault("apps", {})["chrome.exe"] = choice
+                self.save_settings()
+            if choice == "never":
+                self.status.config(text="Chrome исключён из автоматического обнаружения встреч.")
             else:
-                st=''
-            if st:
-                tk.Label(row,text=st,bg="#1b202a",fg="#8f96a3",font=("Segoe UI",9)).pack(side="right",padx=15)
-    def show_meeting_detail(self,m):
-        self.clear()
-        d=MeetingDetail(self.main,m,on_back=self.meetings)
-        d.pack(fill="both",expand=True)
-    def tasks(self):
-        self.clear(); tk.Label(self.main,text="Задачи",bg="#101218",fg="white",font=("Segoe UI",20,"bold")).pack(anchor="w",padx=30,pady=25)
-        c=db(); rows=c.execute("select * from tasks order by id desc").fetchall(); c.close()
-        for m in rows:
-            row=tk.Frame(self.main,bg="#1b202a"); row.pack(fill="x",padx=30,pady=2); tk.Label(row,text=("✓ " if m["status"]=="done" else "○ ")+m["task"],bg="#1b202a",fg="white").pack(side="left",padx=12,pady=9)
-            if m["status"]=="open": tk.Button(row,text="Готово",command=lambda i=m["id"]:self.done(i),bg="#1b202a",fg="#45d19a",bd=0).pack(side="right",padx=10)
-    def done(self,i):
-        c=db(); c.execute("update tasks set status='done' where id=?",(i,)); c.commit(); c.close(); self.tasks()
-    def quit_app(self):
-        self.destroy_recording_overlay()
-        if self.rec: self.stop_recording()
-        try: self.icon.stop()
-        except Exception: pass
-        self.destroy()
+                self.begin_meeting_countdown(payload)
+        self.ask_app_policy("Google Chrome", decided)
+
+    def begin_meeting_countdown(self, payload=None):
+        self.chrome_stop_since = None
+        self.chrome_mic_countdown_until = time.time() + 5.0
+        self.chrome_mic_countdown_reason = "Windows зафиксировала новое обращение Chrome к микрофону"
+        self.status.config(text="Chrome обратился к микрофону. Подтверждение встречи через 5 секунд.")
+
+    def make_tree(self, parent, columns):
+        tree=ttk.Treeview(parent,columns=[x[0] for x in columns],show="headings")
+        for c,label,width in columns:
+            tree.heading(c,text=label); tree.column(c,width=width,anchor="w")
+        tree.pack(fill="both",expand=True)
+        return tree
+
+    def toggle_live_mode(self):
+        if self.live_meeting.get():
+            self.analyze_btn.config(state="disabled")
+            self.status.config(text="Режим встречи включён: анализ отключён, чтобы не мешать звонку.")
+        else:
+            self.analyze_btn.config(state="normal")
+            self.status.config(text="Режим встречи выключен. Анализ доступен, но может загружать CPU.")
+
+    def on_close(self):
+        try:
+            self.mic_monitor.close()
+            if hasattr(self, "chrome_mic_monitor"):
+                self.chrome_mic_monitor.close()
+        finally:
+            self.root.destroy()
+
+    def release_meeting_guard(self):
+        self.meeting_latched = False
+        self.meeting_active = False
+        self.chrome_mic_countdown_until = None
+        self.mic_active_since = None
+        self.mic_quiet_since = None
+        self.chrome_stop_since = None
+        self.analysis_cancel.clear()
+        self.status.config(text="Блокировка встречи снята вручную. Ожидающие данные сохранены; анализ снова доступен.")
+        if not self.analysis_running:
+            self.analyze_btn.config(state="normal")
+
+    def toggle_auto_pause(self):
+        if self.auto_pause.get():
+            self.analyze_btn.config(state="disabled")
+            self.status.config(text="Автоматическая защита включена. Проверяю активные встречи…")
+            self.root.after(100, self.meeting_watch_tick)
+        else:
+            self.analyze_btn.config(state="normal")
+            self.status.config(text="Автоматическая защита выключена. Во время встречи анализ может тормозить звонок.")
+
+    def meeting_watch_tick(self):
+        if not self.root.winfo_exists():
+            return
+        signal, reason = detect_meeting(self.mic_monitor)
+        now = time.time()
+
+        # Registry events are the experimental Chrome-specific signal. Ignore other apps,
+        # and require a cancellable 5-second confirmation window before latching.
+        for event_name, payload in self.chrome_mic_monitor.poll():
+            if event_name in ("chrome_mic_start", "chrome_mic_stop"):
+                stamp = str(payload.get("timestamp", "")) if isinstance(payload, dict) else str(payload)
+                dedupe_key = (event_name, stamp)
+                if stamp and dedupe_key in self.registry_seen_events:
+                    continue
+                if stamp:
+                    self.registry_seen_events.add(dedupe_key)
+                    if len(self.registry_seen_events) > 500:
+                        self.registry_seen_events = set(list(self.registry_seen_events)[-250:])
+            if event_name == "chrome_mic_start":
+                self.record_training_event("Google Chrome", "Доступ к микрофону начался", payload)
+                self.process_chrome_mic_start(payload)
+            elif event_name == "chrome_mic_stop":
+                self.record_training_event("Google Chrome", "Доступ к микрофону завершился", payload)
+                # Mic access ending is only a hint; don't end the meeting immediately.
+                self.chrome_stop_since = now
+                self.status.config(text="Chrome прекратил доступ к микрофону. Проверяю завершение встречи (30 секунд)…")
+            elif event_name == "error":
+                self.status.config(text=str(payload))
+        if self.chrome_mic_countdown_until is not None:
+            remaining = self.chrome_mic_countdown_until - now
+            if remaining <= 0:
+                self.meeting_latched = True
+                self.meeting_active = True
+                self.last_meeting_reason = self.chrome_mic_countdown_reason
+                self.chrome_mic_countdown_until = None
+            elif self.auto_pause.get() and not self.meeting_latched:
+                self.analyze_btn.config(state="disabled")
+                self.status.config(text=f"Chrome использует микрофон. Подтверждение встречи через {max(1, int(remaining + 0.99))} сек. Можно отменить кнопкой «Встреча завершена».")
+                self.root.after(500, self.meeting_watch_tick)
+                return
+
+        # Release after a confirmed registry stop has remained stable for 30 seconds.
+        # A new mic-start event cancels this timer in begin_meeting_countdown().
+        if self.meeting_latched and self.chrome_stop_since is not None and now - self.chrome_stop_since >= 30:
+            self.meeting_latched = False
+            self.meeting_active = False
+            self.chrome_stop_since = None
+            self.mic_quiet_since = None
+            self.status.config(text="Доступ Chrome к микрофону завершён. Режим встречи снят; локальный анализ снова доступен.")
+            if not self.analysis_running:
+                self.analyze_btn.config(state="normal")
+
+        # Audible output from a meeting app is a strong signal and latches immediately.
+        if signal is True:
+            state_key = ("meeting_signal", reason)
+            if self.last_logged_state != state_key:
+                self.record_training_event("Детектор Windows", "Сигнал встречи", reason)
+                self.last_logged_state = state_key
+            self.meeting_latched = True
+            self.mic_active_since = None
+            self.mic_quiet_since = None
+            self.meeting_active = True
+            self.last_meeting_reason = reason
+        elif signal == "mic":
+            if self.mic_active_since is None:
+                self.mic_active_since = now
+            self.mic_quiet_since = None
+            # Require 5 seconds of continuous mic activity before latching.
+            if now - self.mic_active_since >= 5:
+                self.meeting_latched = True
+                self.meeting_active = True
+                self.last_meeting_reason = reason
+        elif signal is False:
+            state_key = ("no_meeting_signal", reason)
+            if self.last_logged_state != state_key:
+                self.record_training_event("Детектор Windows", "Встреча не подтверждена", reason)
+                self.last_logged_state = state_key
+            self.mic_active_since = None
+            if self.meeting_latched:
+                # Keep the meeting latched while there is a running meeting app.
+                try:
+                    import psutil
+                    running = { (p.info.get("name") or "").lower()
+                                for p in psutil.process_iter(["name"])
+                                if p.info.get("name") }
+                    candidates = running & (MEETING_PROCESS_NAMES | BROWSER_PROCESS_NAMES)
+                except Exception:
+                    candidates = set()
+                if not candidates:
+                    if self.mic_quiet_since is None:
+                        self.mic_quiet_since = now
+                    # Only release after 60 seconds without meeting app or signal.
+                    if now - self.mic_quiet_since >= 60:
+                        self.meeting_latched = False
+                        self.meeting_active = False
+                else:
+                    self.mic_quiet_since = None
+                    self.meeting_active = True
+            else:
+                self.meeting_active = False
+        else:
+            # Unknown signal: fail safe if already latched; don't clear it on uncertainty.
+            state_key = ("unknown_signal", reason)
+            if self.last_logged_state != state_key:
+                self.record_training_event("Детектор Windows", "Состояние неизвестно", reason)
+                self.last_logged_state = state_key
+            self.mic_active_since = None
+
+        if self.auto_pause.get():
+            if self.meeting_latched:
+                self.analyze_btn.config(state="disabled")
+                if self.analysis_running:
+                    self.analysis_cancel.set()
+                    self.status.config(text="Встреча обнаружена и удерживается. Останавливаю анализ; после встречи продолжу.")
+                else:
+                    self.status.config(text="Встреча обнаружена. Анализ заблокирован. " + self.last_meeting_reason)
+            elif signal == "mic":
+                elapsed = int(now - self.mic_active_since) if self.mic_active_since else 0
+                self.analyze_btn.config(state="disabled")
+                self.status.config(text=f"Проверяю активность микрофона: {elapsed}/5 секунд.")
+            elif signal is None:
+                self.analyze_btn.config(state="disabled")
+                if self.analysis_running:
+                    self.analysis_cancel.set()
+                self.status.config(text="Не удалось проверить состояние встречи. Анализ заблокирован.")
+            else:
+                if not self.analysis_running and not self.pending_transcript:
+                    self.analyze_btn.config(state="normal")
+                    if not self.status.cget("text").startswith("Итоги сформированы"):
+                        self.status.config(text=reason)
+        elif not self.analysis_running:
+            self.analyze_btn.config(state="normal")
+        self.root.after(3000, self.meeting_watch_tick)
+
+    def resume_after_meeting(self):
+        # Kept for compatibility with older callbacks; release is managed by meeting_watch_tick.
+        if not self.root.winfo_exists():
+            return
+        if self.meeting_latched:
+            self.status.config(text="Встреча всё ещё активна. Анализ остаётся заблокирован.")
+            return
+        if self.pending_transcript:
+            transcript, model = self.pending_transcript
+            self.pending_transcript = None
+            self.start_analysis(transcript, model, automatic=True)
+        else:
+            self.analyze_btn.config(state="normal")
+            self.status.config(text="Встреча завершена. Анализ снова доступен.")
+
+    def open_txt(self):
+        p=filedialog.askopenfilename(filetypes=[("Текстовые файлы","*.txt"),("Все файлы","*.*")])
+        if not p:return
+        try:
+            text=Path(p).read_text(encoding="utf-8-sig",errors="replace")
+            self.transcript_path=p; self.trans.delete("1.0","end"); self.trans.insert("1.0",text)
+            if not self.name.get().strip(): self.name.insert(0,Path(p).stem)
+            self.status.config(text=f"Загружено {Path(p).name}: {len(text)} символов.")
+        except Exception as e: messagebox.showerror("Ошибка",str(e))
+
+    def check_ollama(self):
+        def worker():
+            try:
+                models=list_models()
+                def done():
+                    self.status.config(text="Ollama доступна. Модели: "+(", ".join(models) if models else "не установлены"))
+                    if not models: messagebox.showwarning("Модель не найдена","Установи модель командой: ollama pull "+self.model.get().strip())
+                self.root.after(0,done)
+            except Exception as e:
+                self.root.after(0,lambda:messagebox.showerror("Ollama недоступна","Не удалось подключиться к локальной Ollama.\n\nЗапусти setup_ollama.bat или проверь, что Ollama установлена.\n\nПодробности: "+str(e)))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def analyze(self):
+        if self.auto_pause.get():
+            state, reason = detect_meeting(self.mic_monitor)
+            if state is not False:
+                messagebox.showwarning("Анализ заблокирован",
+                    "Встреча обнаружена или состояние не удалось проверить. Анализ не запущен.\n\n" + reason)
+                return
+        transcript = self.trans.get("1.0", "end-1c").strip()
+        model = self.model.get().strip() or DEFAULT_MODEL
+        if not transcript:
+            messagebox.showinfo("Нет текста", "Сначала открой TXT-расшифровку.")
+            return
+        self.pending_transcript = None
+        self.start_analysis(transcript, model, automatic=False)
+
+    def start_analysis(self, transcript, model, automatic=False):
+        if self.analysis_running:
+            return
+        self.analysis_cancel.clear()
+        self.analysis_running = True
+        self.analyze_btn.config(state="disabled")
+        label = "Автоматически продолжаю анализ после встречи…" if automatic else "Локальная модель анализирует текст…"
+        self.status.config(text=label)
+
+        def worker():
+            try:
+                result = ollama_request(model, transcript, self.analysis_cancel)
+                if self.analysis_cancel.is_set():
+                    raise InterruptedError("Обнаружена встреча.")
+                self.root.after(0, lambda result=result: self.show_result(result))
+                self.root.after(0, lambda: self.status.config(text="Анализ завершён. Проверь результат перед использованием."))
+            except InterruptedError:
+                self.root.after(0, lambda: self.queue_analysis_after_meeting(transcript, model))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): messagebox.showerror("Ошибка анализа", "Не удалось получить результат от Ollama.\n\n" + err))
+                self.root.after(0, lambda: self.status.config(text="Анализ не завершён."))
+            finally:
+                def finish():
+                    self.analysis_running = False
+                    if self.auto_pause.get() and self.meeting_active:
+                        self.analyze_btn.config(state="disabled")
+                    elif self.pending_transcript:
+                        self.analyze_btn.config(state="disabled")
+                    else:
+                        self.analyze_btn.config(state="normal")
+                self.root.after(0, finish)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def queue_analysis_after_meeting(self, transcript, model):
+        self.pending_transcript = (transcript, model)
+        self.analysis_cancel.clear()
+        self.analyze_btn.config(state="disabled")
+        self.status.config(text="Анализ остановлен для встречи. Текст сохранён; после встречи анализ будет запущен заново.")
+    def show_result(self,result):
+        self.data=result
+        self.summary.delete("1.0","end")
+        self.summary.insert("1.0","\n".join("• "+str(x) for x in result.get("summary",[])) or "Резюме не сформировано.")
+        self.fill_tree(self.dec_tree,result.get("decisions",[]),[("text","text"),("evidence","evidence")])
+        self.fill_tree(self.task_tree,result.get("tasks",[]),[("task","task"),("owner","owner"),("deadline","deadline"),("confidence","confidence"),("status",None),("evidence","evidence")],task=True)
+        self.fill_tree(self.q_tree,result.get("open_questions",[]),[("question","question"),("evidence","evidence")])
+        uncertain=result.get("uncertain_fragments",[])
+        msg=f"Итоги сформированы. Решений: {len(result.get('decisions',[]))}; задач: {len(result.get('tasks',[]))}; открытых вопросов: {len(result.get('open_questions',[]))}."
+        if uncertain: msg+=f" Фрагментов на проверку: {len(uncertain)}."
+        self.status.config(text=msg)
+
+    def fill_tree(self,tree,items,mapping,task=False):
+        tree.delete(*tree.get_children())
+        for idx,item in enumerate(items):
+            values=[]
+            for col,key in mapping:
+                if key is None: values.append("На проверке")
+                else: values.append(str(item.get(key,"") or ""))
+            tree.insert("","end",iid=str(idx),values=values)
+
+    def task_status(self,status):
+        for iid in self.task_tree.selection():
+            vals=list(self.task_tree.item(iid,"values")); vals[4]=status; self.task_tree.item(iid,values=vals)
+            idx=int(iid)
+            if idx < len(self.data.get("tasks",[])): self.data["tasks"][idx]["status"]=status
+
+    def export_tasks(self):
+        p=filedialog.asksaveasfilename(defaultextension=".csv",initialfile="MeetingHub_tasks.csv",filetypes=[("CSV","*.csv")])
+        if not p:return
+        with open(p,"w",newline="",encoding="utf-8-sig") as f:
+            w=csv.writer(f); w.writerow(["Задача","Ответственный","Срок","Уверенность","Статус","Фрагмент-основание"])
+            for iid in self.task_tree.get_children(): w.writerow(self.task_tree.item(iid,"values"))
+        messagebox.showinfo("Экспорт","Задачи сохранены.")
+
+    def save_project(self):
+        p=filedialog.asksaveasfilename(defaultextension=".json",initialfile="MeetingHub_project.json",filetypes=[("JSON","*.json")])
+        if not p:return
+        data={"name":self.name.get(),"date":self.date.get(),"model":self.model.get(),"source_file":self.transcript_path,
+              "transcript":self.trans.get("1.0","end-1c"),"analysis":self.data,
+              "summary":self.summary.get("1.0","end-1c"),
+              "decisions":[self.dec_tree.item(i,"values") for i in self.dec_tree.get_children()],
+              "tasks":[self.task_tree.item(i,"values") for i in self.task_tree.get_children()],
+              "questions":[self.q_tree.item(i,"values") for i in self.q_tree.get_children()]}
+        Path(p).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+        messagebox.showinfo("Сохранение","Проект сохранён.")
+
+    def open_project(self):
+        p=filedialog.askopenfilename(filetypes=[("JSON","*.json")])
+        if not p:return
+        try:
+            d=json.loads(Path(p).read_text(encoding="utf-8"))
+            self.name.delete(0,"end"); self.name.insert(0,d.get("name",""))
+            self.date.delete(0,"end"); self.date.insert(0,d.get("date",""))
+            self.model.delete(0,"end"); self.model.insert(0,d.get("model",DEFAULT_MODEL))
+            self.trans.delete("1.0","end"); self.trans.insert("1.0",d.get("transcript",""))
+            self.transcript_path=d.get("source_file",""); self.data=d.get("analysis",{})
+            self.summary.delete("1.0","end"); self.summary.insert("1.0",d.get("summary",""))
+            for tree,key in [(self.dec_tree,"decisions"),(self.task_tree,"tasks"),(self.q_tree,"questions")]:
+                tree.delete(*tree.get_children())
+                for i,row in enumerate(d.get(key,[])): tree.insert("","end",iid=str(i),values=row)
+            self.status.config(text="Проект открыт: "+Path(p).name)
+        except Exception as e: messagebox.showerror("Ошибка открытия",str(e))
 
 if __name__=="__main__":
-    set_low_process_priority()
-    App().mainloop()
+    root=tk.Tk(); app=App(root)
+    for child in root.winfo_children():
+        if isinstance(child,ttk.Frame):
+            for w in child.winfo_children():
+                if isinstance(w,ttk.Button) and w.cget("text")=="Сохранить проект": w.configure(command=app.save_project)
+                if isinstance(w,ttk.Button) and w.cget("text")=="Открыть проект": w.configure(command=app.open_project)
+    root.mainloop()
