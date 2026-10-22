@@ -2,5 +2,10 @@ __pycache__/
 *.pyc
 meeting_hub_settings.json
 *.log
+*.log.*
+meeting_hub_training.*-backup-*.json
+meeting_hub_training.broken-*.json
+meeting_hub_training.before-import-*.json
+*.tmp
 build/
 dist/
