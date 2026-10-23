@@ -62,8 +62,9 @@ ru.FinishedLabel=Meeting Hub установлен.%n%nПри первом зап
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usPostUninstall then
-    MsgBox('Программа удалена. Ваши записи, шаблоны и журнал сохранены в папке:' + #13#10 +
+  { Тихое удаление (/VERYSILENT) не должно ждать нажатия кнопки. }
+  if (CurUninstallStep = usPostUninstall) and (not UninstallSilent) then
+    SuppressibleMsgBox('Программа удалена. Ваши записи, шаблоны и журнал сохранены в папке:' + #13#10 +
            ExpandConstant('{localappdata}\Meeting Hub') + #13#10 +
-           'Удалите её вручную, если они больше не нужны.', mbInformation, MB_OK);
+           'Удалите её вручную, если они больше не нужны.', mbInformation, MB_OK, IDOK);
 end;

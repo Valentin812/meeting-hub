@@ -95,6 +95,7 @@ jobs:
           "portable=pkg\$name.zip" >> $env:GITHUB_ENV
 
       - name: Test - silent install for the current user
+        timeout-minutes: 5
         shell: pwsh
         run: |
           Start-Process -FilePath $env:setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$env:RUNNER_TEMP\setup.log" -Wait
@@ -104,6 +105,7 @@ jobs:
           Write-Output "::notice title=installer::installed to $exe; start menu shortcuts: $($lnk.Count)"
 
       - name: Test - installed app checks sound and records 4 s while a tone plays
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
@@ -124,6 +126,7 @@ jobs:
           if (Test-Path "$env:LOCALAPPDATA\Programs\Meeting Hub\recordings") { throw "data written next to the program instead of the user profile" }
 
       - name: Test - GUI starts, imports data of an old version placed next to the exe
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
@@ -142,6 +145,7 @@ jobs:
           Write-Output "::notice title=exe gui::started; old data imported into the profile and migrated"
 
       - name: Test - upgrade over the installed version and uninstall keeps user data
+        timeout-minutes: 5
         shell: pwsh
         run: |
           Start-Process -FilePath $env:setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
