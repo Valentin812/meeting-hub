@@ -306,6 +306,20 @@ class FormatFallback(Base):
         backend.device = lambda name: BadDev()
         with self.assertRaises(RecorderError) as ctx:
             backend.open("mic", 16000)
+        # одна причина для всех форматов — показываем её один раз
+        self.assertEqual(str(ctx.exception), "Сломанный: RuntimeError: invalid argument")
+
+    def test_backend_lists_different_failures(self):
+        class PickyDev:
+            name = "Капризный"
+
+            def recorder(self, samplerate, channels, blocksize=None):
+                raise RuntimeError(f"bad {samplerate}")
+
+        backend = rec_mod.SoundcardBackend.__new__(rec_mod.SoundcardBackend)
+        backend.device = lambda name: PickyDev()
+        with self.assertRaises(RecorderError) as ctx:
+            backend.open("mic", 16000)
         self.assertIn("ни один формат", str(ctx.exception))
 
 
