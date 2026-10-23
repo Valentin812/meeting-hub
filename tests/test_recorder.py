@@ -210,5 +210,48 @@ class Guards(Base):
             rec_mod.MIN_FREE_BYTES = old
 
 
+class Helpers(Base):
+    def test_downsample_by_three(self):
+        x = np.array([0, 3, 6, 9, 12, 15, 1], dtype=np.float32)
+        self.assertEqual(rec_mod.downsample(x, 3).tolist(), [3.0, 12.0])
+        self.assertIs(rec_mod.downsample(x, 1), x)
+
+    def test_describe_error_hints(self):
+        text = rec_mod.describe_error(RuntimeError("Error 0x800401f0"))
+        self.assertIn("COM", text)
+        self.assertIn("устройство не найдено", rec_mod.describe_error(RuntimeError("Error 0x80070490")))
+
+    def test_thread_hooks_are_called_in_each_capture_thread(self):
+        calls = []
+
+        class HookBackend(Backend):
+            def thread_enter(self):
+                calls.append(("enter", threading.current_thread().name))
+                return "token"
+
+            def thread_exit(self, token):
+                calls.append(("exit", token))
+
+        rec = AudioRecorder(self.dir, HookBackend({"mic": ToneSource(0.1), "system": ToneSource(0.1)}),
+                            rate=RATE, block_sec=0.1)
+        rec.start()
+        time.sleep(0.3)
+        rec.stop()
+        self.assertEqual(sorted(c[1] for c in calls if c[0] == "enter"), ["rec-mic", "rec-system"])
+        self.assertEqual([c[1] for c in calls if c[0] == "exit"], ["token", "token"])
+
+    def test_self_test_reports_levels_and_errors(self):
+        backend = Backend({"mic": ToneSource(0.5), "system": None}, fail={"system"})
+        old = rec_mod.RATE
+        rec_mod.RATE = RATE
+        try:
+            res = rec_mod.self_test(0.6, backend)
+        finally:
+            rec_mod.RATE = old
+        self.assertGreater(res["mic"]["peak"], 0.4)
+        self.assertGreater(res["mic"]["seconds"], 0.3)
+        self.assertIn("не найдено", res["system"]["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

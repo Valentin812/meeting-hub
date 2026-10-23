@@ -548,7 +548,7 @@ class App:
         for name, label in (("mic", "вы"), ("system", "собеседники")):
             info = h.get(name, {})
             if info.get("error"):
-                parts.append(f"{label}: ошибка")
+                parts.append(f"{label}: ошибка — см. журнал")
             elif not info.get("started"):
                 parts.append(f"{label}: подключаю…")
             else:
@@ -603,6 +603,8 @@ class App:
         ttk.Button(bar, text="Воспроизвести", command=self.play_selected_record).pack(side="left")
         ttk.Button(bar, text="Открыть папку", command=self.open_records_folder).pack(side="left", padx=5)
         ttk.Button(bar, text="Обновить", command=self.refresh_records).pack(side="left", padx=5)
+        self.test_btn = ttk.Button(bar, text="Проверить запись (5 с)", command=self.test_recording)
+        self.test_btn.pack(side="right")
         self.refresh_records()
 
     def refresh_records(self):
@@ -624,6 +626,46 @@ class App:
             self.records_tree.insert("", "end", iid=str(item["path"]), values=(
                 when, f"{dur // 3600}:{dur % 3600 // 60:02d}:{dur % 60:02d}", meeting,
                 f"{item['size'] / (1024 * 1024):.1f} МБ", "; ".join(notes)))
+
+    def test_recording(self):
+        if self.recorder is not None:
+            messagebox.showinfo("Проверка записи", "Сейчас идёт запись. Проверку можно запустить после неё.")
+            return
+        try:
+            backend = rec_mod.SoundcardBackend()
+        except rec_mod.RecorderError as e:
+            messagebox.showerror("Проверка записи", str(e))
+            return
+        self.test_btn.config(state="disabled", text="Проверяю… говорите и включите звук")
+        self.last_event_text = "Проверка записи: 5 секунд говорите в микрофон и включите любой звук на компьютере."
+        self.refresh_status()
+
+        def work():
+            try:
+                res = rec_mod.self_test(5.0, backend)
+            except Exception as e:
+                res = {"error": rec_mod.describe_error(e)}
+            self._ui_calls.put((self._test_done, (res,)))
+        threading.Thread(target=work, name="rec-test", daemon=True).start()
+
+    def _test_done(self, res):
+        self.test_btn.config(state="normal", text="Проверить запись (5 с)")
+        if "error" in res and "mic" not in res:
+            text = "Проверка не удалась: " + res["error"]
+        else:
+            lines = []
+            for name, label in (("mic", "Микрофон (вы)"), ("system", "Звук компьютера (собеседники)")):
+                info = res.get(name, {})
+                lines.append(f"{label}\n  устройство: {info.get('device') or '—'}")
+                if info.get("error"):
+                    lines.append(f"  ОШИБКА: {info['error']}")
+                else:
+                    loud = "слышно" if info.get("peak", 0) > 0.02 else "тишина"
+                    lines.append(f"  получено {info.get('seconds', 0):.1f} с звука, пик {info.get('peak', 0):.2f} — {loud}")
+            text = "\n".join(lines)
+        self.log.info("recording self-test: %s", res)
+        self._journal_note("Проверка записи", text.replace("\n", " "), "user")
+        messagebox.showinfo("Проверка записи", text)
 
     def play_selected_record(self):
         sel = self.records_tree.selection()

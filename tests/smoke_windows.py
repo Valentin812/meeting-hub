@@ -53,6 +53,44 @@ def check_real_audio():
     assert ok, why
 
 
+def check_com_threads():
+    """Воспроизводим ошибку v5.1 и проверяем исправление.
+
+    Главный поток с Tk работает в STA; поток без своей инициализации COM не может
+    обратиться к звуковым устройствам. Поток с SoundcardBackend.thread_enter() — может.
+    """
+    import threading
+    import tkinter as tk
+    import recorder
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        import soundcard as sc
+        out = {}
+
+        def probe(key, init):
+            token = recorder.SoundcardBackend.thread_enter() if init else None
+            try:
+                sc.all_microphones(include_loopback=True)
+                out[key] = "ok"
+            except Exception as e:
+                out[key] = recorder.describe_error(e)
+            finally:
+                recorder.SoundcardBackend.thread_exit(token)
+
+        for key, init in (("без COM", False), ("с COM", True)):
+            th = threading.Thread(target=probe, args=(key, init))
+            th.start()
+            th.join(10)
+        real = recorder.self_test(1.0)
+        print(f"::notice title=com::{out}; self_test={ {k: v['error'] for k, v in real.items()} }")
+        assert out.get("с COM") == "ok", out
+        for info in real.values():
+            assert "0x800401f0" not in info["error"].lower(), real
+    finally:
+        root.destroy()
+
+
 def check_ui():
     # Работаем на копии, чтобы не трогать файл обучения в репозитории.
     work = Path(tempfile.mkdtemp())
@@ -149,7 +187,7 @@ if __name__ == "__main__":
         sys.exit(0)
     import traceback
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    for check in (check_signals, check_real_audio, check_ui):
+    for check in (check_signals, check_real_audio, check_com_threads, check_ui):
         try:
             check()
         except Exception:

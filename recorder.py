@@ -42,14 +42,36 @@ class RecorderError(Exception):
 # ---------------------------------------------------------------------------
 # Источники звука
 # ---------------------------------------------------------------------------
+DEVICE_RATE = 48000   # родная частота WASAPI; на ней же работала запись в 1.2.0
+
+
 class SoundcardBackend:
-    """Микрофон и loopback устройства вывода через пакет soundcard (WASAPI)."""
+    """Микрофон и loopback устройства вывода через пакет soundcard (WASAPI).
+
+    Важно для Windows: каждый поток, работающий со звуком, должен сам подключиться
+    к COM (CoInitializeEx). Главный поток Tkinter работает в однопоточном режиме COM,
+    поэтому потоки записи без собственной инициализации получают ошибку.
+    """
 
     def __init__(self):
         try:
             import soundcard  # noqa: F401
         except Exception as e:  # пакет не установлен или не загрузился
             raise RecorderError(f"модуль записи не установлен ({e}). Запустите setup.bat") from e
+
+    @staticmethod
+    def thread_enter():
+        if os.name != "nt":
+            return False
+        import ctypes
+        hr = ctypes.windll.ole32.CoInitializeEx(None, 0x0)  # COINIT_MULTITHREADED
+        return hr in (0, 1)   # S_OK / S_FALSE — нужно парное CoUninitialize
+
+    @staticmethod
+    def thread_exit(token):
+        if token:
+            import ctypes
+            ctypes.windll.ole32.CoUninitialize()
 
     def open(self, name, rate):
         import soundcard as sc
@@ -58,25 +80,54 @@ class SoundcardBackend:
         else:
             speaker = sc.default_speaker()
             dev = sc.get_microphone(id=str(speaker.id), include_loopback=True)
-        rec = dev.recorder(samplerate=rate, channels=1)
+        factor = DEVICE_RATE // rate if DEVICE_RATE % rate == 0 else 1
+        rec = dev.recorder(samplerate=rate * factor, channels=1)
         rec.__enter__()
-        return _SoundcardSource(rec, getattr(dev, "name", name))
+        return _SoundcardSource(rec, getattr(dev, "name", name), factor)
 
 
 class _SoundcardSource:
-    def __init__(self, rec, device):
+    def __init__(self, rec, device, factor=1):
         self.rec = rec
         self.device = device
+        self.factor = factor
 
     def read(self, frames):
-        data = np.asarray(self.rec.record(numframes=frames), dtype=np.float32)
-        return data[:, 0] if data.ndim == 2 else data
+        data = np.asarray(self.rec.record(numframes=frames * self.factor), dtype=np.float32)
+        data = data[:, 0] if data.ndim == 2 else data
+        return downsample(data, self.factor)
 
     def close(self):
         try:
             self.rec.__exit__(None, None, None)
         except Exception:
             pass
+
+
+def downsample(samples, factor):
+    """Понизить частоту в целое число раз усреднением (для речи достаточно)."""
+    if factor <= 1:
+        return samples
+    usable = len(samples) - len(samples) % factor
+    return samples[:usable].reshape(-1, factor).mean(axis=1).astype(np.float32)
+
+
+def describe_error(e):
+    """Понятный текст ошибки soundcard/Windows."""
+    text = f"{type(e).__name__}: {e}".strip()
+    hints = {
+        "0x800401f0": "COM не инициализирован в потоке записи",
+        "0x80070490": "устройство не найдено — проверьте устройства по умолчанию в «Параметры → Звук»",
+        "0x88890004": "устройство отключено или занято",
+        "0x8889000a": "устройство занято другим приложением в монопольном режиме",
+        "0x88890008": "формат записи не поддерживается устройством",
+        "0x80070005": "доступ к микрофону запрещён — «Параметры → Конфиденциальность → Микрофон»",
+    }
+    low = text.lower()
+    for code, hint in hints.items():
+        if code in low:
+            return f"{hint} ({text})"
+    return text
 
 
 def available():
@@ -181,11 +232,29 @@ class AudioRecorder:
         return self.stem
 
     def _capture_loop(self, name):
+        token = None
+        enter = getattr(self.backend, "thread_enter", None)
+        if enter is not None:
+            try:
+                token = enter()
+            except Exception:
+                token = None
+        try:
+            self._capture_source(name)
+        finally:
+            leave = getattr(self.backend, "thread_exit", None)
+            if leave is not None:
+                try:
+                    leave(token)
+                except Exception:
+                    pass
+
+    def _capture_source(self, name):
         track = self.tracks[name]
         try:
             source = self.backend.open(name, self.rate)
         except Exception as e:
-            track.error = f"не удалось открыть {SOURCE_LABELS[name]}: {e}"
+            track.error = f"не удалось открыть {SOURCE_LABELS[name]}: {describe_error(e)}"
             return
         track.device = getattr(source, "device", "")
         track.started = True
@@ -198,7 +267,7 @@ class AudioRecorder:
                 if block is not None and len(block):
                     self._queue.put((name, t, block))
         except Exception as e:
-            track.error = f"{SOURCE_LABELS[name]}: запись прервалась ({e})"
+            track.error = f"{SOURCE_LABELS[name]}: запись прервалась ({describe_error(e)})"
         finally:
             source.close()
 
@@ -388,3 +457,53 @@ def list_recordings(folder):
         items.append({"path": wav, "size": wav.stat().st_size, **meta})
     items.sort(key=lambda m: m["path"].name, reverse=True)
     return items
+
+
+def self_test(seconds=3.0, backend=None):
+    """Короткая пробная запись в памяти: что слышно с каждого источника. Для кнопки «Проверить запись»."""
+    backend = backend or SoundcardBackend()
+    results = {}
+
+    def run(name):
+        token = None
+        enter = getattr(backend, "thread_enter", None)
+        if enter:
+            try:
+                token = enter()
+            except Exception:
+                pass
+        info = {"device": "", "error": "", "seconds": 0.0, "peak": 0.0, "rms": 0.0}
+        try:
+            src = backend.open(name, RATE)
+            info["device"] = getattr(src, "device", "")
+            got, sq, peak = 0, 0.0, 0.0
+            deadline = time.time() + seconds
+            while time.time() < deadline:
+                block = src.read(int(RATE * 0.25))
+                if block is None or not len(block):
+                    continue
+                got += len(block)
+                sq += float(np.sum(np.square(block, dtype=np.float64)))
+                peak = max(peak, float(np.max(np.abs(block))))
+            src.close()
+            info.update(seconds=got / RATE, peak=peak, rms=(sq / got) ** 0.5 if got else 0.0)
+        except Exception as e:
+            info["error"] = describe_error(e)
+        finally:
+            leave = getattr(backend, "thread_exit", None)
+            if leave:
+                try:
+                    leave(token)
+                except Exception:
+                    pass
+        results[name] = info
+
+    threads = [threading.Thread(target=run, args=(n,), daemon=True) for n in SOURCES]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=seconds + 8)
+    for n in SOURCES:
+        results.setdefault(n, {"device": "", "error": "данных нет — во время проверки на компьютере ничего не звучало?",
+                               "seconds": 0.0, "peak": 0.0, "rms": 0.0})
+    return results
