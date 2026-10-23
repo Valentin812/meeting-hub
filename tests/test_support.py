@@ -17,7 +17,8 @@ import support  # noqa: E402
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
+        # resolve(): на Windows временная папка бывает в коротком виде (RUNNER~1), а программа — в полном.
+        self.dir = Path(tempfile.mkdtemp()).resolve()
 
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
