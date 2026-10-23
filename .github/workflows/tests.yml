@@ -68,7 +68,7 @@ jobs:
         run: |
           python audio_check.py
           $r = Get-Content meeting_hub_audio_report.txt -Encoding utf8
-          $ok = ($r | Select-String ': OK').Count
+          $ok = ($r | Select-String '^\s*(\[поток\]\s*)?OK').Count
           $err = ($r | Select-String 'ОШИБКА').Count
           Write-Output "::notice title=audio_check::OK=$ok ОШИБКА=$err"
           if ($ok -lt 1) { throw "audio_check.py did not open any device" }

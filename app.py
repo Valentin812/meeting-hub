@@ -98,7 +98,14 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.1.4"
+APP_VERSION = "5.2.0"
+
+
+def app_dir():
+    """Папка программы: рядом с MeetingHub.exe в сборке, рядом с app.py при запуске из исходников."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 TICK_MS = 1000
 
 WHO = {"auto": "Автоматика", "user": "Пользователь", "legacy": "v4.9 (архив)"}
@@ -211,7 +218,7 @@ class App:
         self.root = root
         root.title(f"Meeting Hub v{APP_VERSION}")
         root.geometry("1360x900")
-        here = Path(__file__).resolve().parent
+        here = app_dir()
         self.log = setup_logging(here)
         self.project_path = ""
         self.transcript_path = ""
@@ -673,15 +680,17 @@ class App:
         if self.recorder is not None:
             messagebox.showinfo("Проверка звука", "Сейчас идёт запись. Проверку можно запустить после неё.")
             return
-        script = Path(__file__).resolve().with_name("audio_check.py")
-        report = script.with_name("meeting_hub_audio_report.txt")
+        report = app_dir() / "meeting_hub_audio_report.txt"
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--audio-check"]
+        else:
+            cmd = [sys.executable.replace("pythonw.exe", "python.exe"), str(app_dir() / "audio_check.py")]
         self.last_event_text = "Подробная проверка звука: около 10 секунд…"
         self.refresh_status()
 
         def work():
             try:
-                exe = sys.executable.replace("pythonw.exe", "python.exe")
-                subprocess.run([exe, str(script)], cwd=str(script.parent), timeout=120,
+                subprocess.run(cmd, cwd=str(app_dir()), timeout=180,
                                capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 error = ""
             except Exception as e:
@@ -1111,7 +1120,36 @@ class App:
         except Exception as e: messagebox.showerror("Ошибка открытия", str(e))
 
 
-if __name__ == "__main__":
+def cli_record(seconds):
+    """MeetingHub.exe --record-test N: записать N секунд без окна (для проверки сборки)."""
+    rec = rec_mod.AudioRecorder(app_dir() / "recordings")
+    rec.start({"meeting": "проверка сборки", "app_version": APP_VERSION})
+    time.sleep(seconds)
+    result = rec.stop()
+    import wave
+    import numpy as np
+    with wave.open(str(result["path"]), "rb") as w:
+        frames = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").reshape(-1, 2)
+    summary = {"file": result["path"].name, "duration": round(result["duration"], 2), "errors": result["errors"],
+               "mic_peak": int(np.abs(frames[:, 0]).max()) if len(frames) else 0,
+               "system_peak": int(np.abs(frames[:, 1]).max()) if len(frames) else 0}
+    (app_dir() / "record_test.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--audio-check"]:
+        import audio_check
+        audio_check.run(app_dir() / "meeting_hub_audio_report.txt")
+        return
+    if args[:1] == ["--record-test"]:
+        cli_record(float(args[1]) if len(args) > 1 else 3.0)
+        return
     root = tk.Tk()
-    app = App(root)
+    App(root)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
