@@ -74,6 +74,32 @@ def privacy():
         pass
 
 
+def compat():
+    """Режим совместимости (свойства файла → Совместимость) ломает звуковые API Windows."""
+    if os.name != "nt":
+        return
+    import winreg
+    exe = sys.executable.lower()
+    found = False
+    for root, rname in ((winreg.HKEY_CURRENT_USER, "HKCU"), (winreg.HKEY_LOCAL_MACHINE, "HKLM")):
+        try:
+            with winreg.OpenKey(root, r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers") as k:
+                i = 0
+                while True:
+                    try:
+                        name, value, _ = winreg.EnumValue(k, i)
+                    except OSError:
+                        break
+                    i += 1
+                    if name.lower() == exe or "python" in name.lower() or "meetinghub" in name.lower():
+                        out(f"  {rname}: {name} = {value}")
+                        found = True
+        except OSError:
+            pass
+    if not found:
+        out("  не включён")
+
+
 def portaudio_all():
     """Пробуем открыть КАЖДОЕ устройство записи и loopback через PortAudio."""
     import numpy as np
@@ -159,6 +185,12 @@ def main():
     out("\n--- Доступ к микрофону (Параметры Windows) ---")
     try:
         privacy()
+    except Exception:
+        out("  ОШИБКА: " + last_error())
+
+    out("\n--- Режим совместимости для этой программы ---")
+    try:
+        compat()
     except Exception:
         out("  ОШИБКА: " + last_error())
 

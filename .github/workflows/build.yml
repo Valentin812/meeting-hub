@@ -63,8 +63,9 @@ jobs:
         shell: pwsh
         run: |
           $dir = "pkg\$env:name"
-          $tone = Start-Process -FilePath python -ArgumentList "-c", "import numpy as np, soundcard as sc, time; t=(0.3*np.sin(2*np.pi*440*np.arange(48000)/48000)).astype('float32'); p=sc.default_speaker().player(samplerate=48000, channels=1); p.__enter__(); [p.play(t) for _ in range(12)]" -PassThru
-          Start-Sleep -Seconds 1
+          $tone = Start-Process -FilePath python -ArgumentList "tests\play_tone.py", "15" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 2
+          if ($tone.HasExited) { throw "tone player exited early" }
           Start-Process -FilePath "$dir\MeetingHub.exe" -ArgumentList "--record-test", "4" -Wait -WorkingDirectory $dir
           Stop-Process -Id $tone.Id -ErrorAction SilentlyContinue
           $j = Get-Content "$dir\record_test.json" -Encoding utf8 | ConvertFrom-Json
