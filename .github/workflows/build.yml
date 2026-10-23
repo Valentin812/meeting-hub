@@ -56,6 +56,9 @@ jobs:
           $r | Select-Object -First 40
           $ok = ($r | Select-String '^\s*OK').Count
           Write-Output "::notice title=exe audio_check::OK=$ok"
+          $sec = ($r | Select-String -Context 0,1 'Антивирусы' | ForEach-Object { $_.Context.PostContext }) -join ' '
+          Write-Output "::notice title=exe security::$sec"
+          if (-not ($r | Select-String 'Сторонние библиотеки')) { throw "report has no module section" }
           if ($ok -lt 1) { throw "exe could not open any audio device" }
           Remove-Item "$dir\meeting_hub_audio_report.txt"
 

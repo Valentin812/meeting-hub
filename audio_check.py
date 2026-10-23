@@ -133,6 +133,10 @@ def foreign_modules():
     from ctypes import wintypes
     psapi = ctypes.WinDLL("psapi")
     kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.EnumProcessModules.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.HMODULE), wintypes.DWORD,
+                                         ctypes.POINTER(wintypes.DWORD)]
+    psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
     proc = kernel32.GetCurrentProcess()
     mods = (wintypes.HMODULE * 2048)()
     need = wintypes.DWORD()
