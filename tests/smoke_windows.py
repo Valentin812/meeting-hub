@@ -31,10 +31,25 @@ def check_signals():
     assert per_tick < 500, "опрос слишком медленный"
 
 
+def check_real_audio():
+    """Есть ли на этой машине звуковые устройства: на раннере GitHub их обычно нет — только сообщаем."""
+    import recorder
+    ok, why = recorder.available()
+    detail = why
+    if ok:
+        try:
+            import soundcard as sc
+            detail = f"mic={sc.default_microphone()!r} speaker={sc.default_speaker()!r}"
+        except Exception as e:
+            detail = f"нет устройств: {e}"
+    print(f"::notice title=audio::soundcard available={ok}; {detail}")
+    assert ok, why
+
+
 def check_ui():
     # Работаем на копии, чтобы не трогать файл обучения в репозитории.
     work = Path(tempfile.mkdtemp())
-    for name in ("app.py", "meeting_detector.py", "win_signals.py", "training_store.py"):
+    for name in ("app.py", "meeting_detector.py", "win_signals.py", "training_store.py", "recorder.py"):
         shutil.copy(ROOT / name, work / name)
     shutil.copy(ROOT / "tests" / "data" / "meeting_hub_training_v49.json", work / "meeting_hub_training.json")
     sys.path.insert(0, str(work))
@@ -43,6 +58,23 @@ def check_ui():
     app_mod = importlib.import_module("app")
     from meeting_detector import Candidate, COUNTDOWN, ASKING, ENDING, IN_MEETING, IDLE
 
+    import numpy as np
+
+    class FakeSource:
+        device = "fake"
+
+        def read(self, frames):
+            time.sleep(frames / 16000)
+            return np.full(frames, 0.2, dtype=np.float32)
+
+        def close(self):
+            pass
+
+    class FakeBackend:
+        def open(self, name, rate):
+            return FakeSource()
+
+    app_mod.rec_mod.SoundcardBackend = FakeBackend
     root = tk.Tk()
     app = app_mod.App(root)
     seen = []
@@ -69,11 +101,35 @@ def check_ui():
         assert det.state == IN_MEETING
         app.user_action("manual_end")
         assert det.state == IDLE and app.prompt is None
+        # Запись по встрече: поддельные устройства, настоящие потоки и файлы.
+        app.record_meetings.set(True)
+        app.user_action("manual_start")
+        assert app.recorder is not None, app.last_event_text
+        root.after(1500, finish_recording)
+
+    def finish_recording():
+        app.refresh_status()
+        assert "ЗАПИСЬ" in app.status.cget("text"), app.status.cget("text")
+        app.user_action("manual_end")
+        assert app.recorder is None
+        wait_saved()
+
+    def wait_saved(n=0):
+        app.drain_ui_calls()
+        if app._saving_threads and n < 50:
+            root.after(200, wait_saved, n + 1)
+            return
+        assert not app._saving_threads, "запись не сохранилась"
+        rows = app.records_tree.get_children()
+        assert len(rows) == 1, rows
+        seen.append("recorded")
         app.on_close()
 
     root.after(500, step)
     root.mainloop()
-    assert seen == [COUNTDOWN, ASKING, ENDING], seen
+    assert seen == [COUNTDOWN, ASKING, ENDING, "recorded"], seen
+    wavs = list((work / "recordings").glob("*.wav"))
+    assert len(wavs) == 1 and wavs[0].stat().st_size > 16000, wavs
     files = sorted(p.name for p in work.iterdir())
     print("files after run:", files)
     assert any(".v4-backup-" in f for f in files), "нет резервной копии данных v4.9"
@@ -85,7 +141,7 @@ if __name__ == "__main__":
         print("Пропуск: тест только для Windows")
         sys.exit(0)
     import traceback
-    for check in (check_signals, check_ui):
+    for check in (check_signals, check_real_audio, check_ui):
         try:
             check()
         except Exception:

@@ -20,8 +20,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install numpy
       - name: Syntax
-        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py
+        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
@@ -37,6 +39,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install (as setup.bat does)
+        run: python -m pip install --upgrade -r requirements.txt
       - name: Unit tests
         run: python -m unittest discover -s tests -v
       - name: Windows API and UI smoke test

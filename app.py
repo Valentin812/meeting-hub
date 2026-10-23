@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from datetime import datetime
-import json, csv, urllib.request, urllib.error, threading, re, time, subprocess, math
+import os, queue, json, csv, urllib.request, urllib.error, threading, re, time, subprocess, math
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen2.5:3b"
@@ -92,12 +92,13 @@ from logging.handlers import RotatingFileHandler
 from tkinter import simpledialog
 
 import win_signals
+import recorder as rec_mod
 from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, BROWSERS, MEETING_APPS,
                               IDLE, ASKING, COUNTDOWN, IN_MEETING, ENDING,
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.0"
+APP_VERSION = "5.1"
 TICK_MS = 1000
 
 WHO = {"auto": "Автоматика", "user": "Пользователь", "legacy": "v4.9 (архив)"}
@@ -224,6 +225,14 @@ class App:
         self.analysis_cancel = threading.Event()
         self.analysis_running = False
         self.pending_transcript = None
+        self.settings_path = here / "meeting_hub_settings.json"
+        self.settings = self.load_settings()
+        self.rec_folder = here / "recordings"
+        self.recorder = None
+        self.rec_by_meeting = False
+        self.rec_errors_seen = set()
+        self._saving_threads = []
+        self._ui_calls = queue.Queue()   # результаты фоновых потоков выполняются в потоке интерфейса
 
         header = ttk.Frame(root, padding=10); header.pack(fill="x")
         ttk.Label(header, text="MEETING HUB", font=("Segoe UI", 18, "bold")).pack(side="left")
@@ -248,8 +257,13 @@ class App:
                         command=self.toggle_auto_detect).pack(side="left")
         ttk.Checkbutton(livebar, text="Останавливать ИИ во время встречи", variable=self.auto_pause,
                         command=self.refresh_analysis_button).pack(side="left", padx=12)
+        self.record_meetings = tk.BooleanVar(value=bool(self.settings.get("record_meetings", True)))
+        ttk.Checkbutton(livebar, text="Записывать встречи", variable=self.record_meetings,
+                        command=self.toggle_record_setting).pack(side="left")
         ttk.Button(livebar, text="Завершить встречу", command=lambda: self.user_action("manual_end")).pack(side="right")
         ttk.Button(livebar, text="Начать встречу", command=lambda: self.user_action("manual_start")).pack(side="right", padx=6)
+        self.rec_btn = ttk.Button(livebar, text="● Записать", command=self.toggle_recording_button)
+        self.rec_btn.pack(side="right", padx=(0, 18))
 
         self.status = ttk.Label(root, text="Запуск…", padding=(12, 0, 12, 2), font=("Segoe UI", 10, "bold"))
         self.status.pack(fill="x")
@@ -261,9 +275,11 @@ class App:
         self.tab_trans = ttk.Frame(nb, padding=8); self.tab_summary = ttk.Frame(nb, padding=8)
         self.tab_dec = ttk.Frame(nb, padding=8); self.tab_tasks = ttk.Frame(nb, padding=8)
         self.tab_questions = ttk.Frame(nb, padding=8); self.tab_training = ttk.Frame(nb, padding=8)
+        self.tab_records = ttk.Frame(nb, padding=8)
         nb.add(self.tab_trans, text="Расшифровка"); nb.add(self.tab_summary, text="Резюме")
         nb.add(self.tab_dec, text="Решения"); nb.add(self.tab_tasks, text="Задачи")
         nb.add(self.tab_questions, text="Открытые вопросы"); nb.add(self.tab_training, text="Обучение")
+        nb.add(self.tab_records, text="Записи")
         self.trans = tk.Text(self.tab_trans, wrap="word", font=("Segoe UI", 10)); self.trans.pack(fill="both", expand=True)
         tbar = ttk.Frame(self.tab_trans); tbar.pack(fill="x", pady=5)
         ttk.Button(tbar, text="Открыть TXT", command=self.open_txt).pack(side="left")
@@ -279,17 +295,31 @@ class App:
         self.q_tree = self.make_tree(self.tab_questions, [("question", "Открытый вопрос", 650), ("evidence", "Фрагмент-основание", 500)])
         ttk.Label(root, text="ИИ формирует черновик. Проверяйте решения, поручения, имена, суммы и сроки по записи.", padding=10).pack(fill="x")
         self.build_training_panel()
+        self.build_records_panel()
         self.refresh_status()
         if self.store.notices:
             self.last_event_text = " ".join(self.store.notices)
             self.log.info("store: %s", self.last_event_text)
         self._tick_job = self.root.after(800, self.tick)
+        threading.Thread(target=self._recover_recordings, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Цикл обнаружения
     # ------------------------------------------------------------------
+    def drain_ui_calls(self):
+        while True:
+            try:
+                fn, args = self._ui_calls.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                fn(*args)
+            except Exception:
+                self.log.exception("Ошибка обработки фонового результата")
+
     def tick(self):
         self._tick_job = None
+        self.drain_ui_calls()
         try:
             obs = win_signals.observe()
             self.last_obs = obs
@@ -313,7 +343,17 @@ class App:
         self._insert_journal_row(entry, select=True)
         if decision.new in (COUNTDOWN, IN_MEETING, ENDING) and self.auto_pause.get() and self.analysis_running:
             self.analysis_cancel.set()
+        if decision.new == IN_MEETING and decision.prev not in (IN_MEETING, ENDING):
+            if self.recorder is not None:
+                self.rec_by_meeting = True
+            elif self.record_meetings.get():
+                self.start_recording("Запись встречи", decision.initiator, by_meeting=True)
         if decision.new == IDLE and decision.prev in (IN_MEETING, ENDING):
+            if self.recorder is not None and self.rec_by_meeting:
+                cut_at = None
+                if decision.prev == ENDING and self.detector.last_active_at:
+                    cut_at = self.detector.last_active_at + 2.0   # тишину после ухода со встречи не храним
+                self.stop_recording("Встреча завершена", decision.initiator, cut_at=cut_at)
             self.root.after(500, self.resume_after_meeting)
         self.refresh_status()
         self.refresh_prompt()
@@ -349,8 +389,8 @@ class App:
         what = cand.describe() if cand else ""
         if kind == COUNTDOWN:
             self.prompt.set_text(f"Обнаружена встреча: {cand.label if cand else ''}",
-                                 f"{what}.\nРежим встречи включится через {left} с. "
-                                 "Локальный ИИ будет приостановлен.")
+                                 f"{what}.\nРежим встречи{' и запись звука' if self.record_meetings.get() else ''} "
+                                 f"включится через {left} с. Локальный ИИ будет приостановлен.")
         elif kind == ASKING:
             self.prompt.set_text("Это встреча?", f"{what}.\nВопрос закроется через {left} с.")
         elif kind == ENDING:
@@ -366,6 +406,11 @@ class App:
             parts.append(place)
         if not self.auto_detect.get():
             parts.append("автообнаружение выключено")
+        if self.recorder is not None:
+            sec = int(self.recorder.elapsed())
+            parts.append(f"● ЗАПИСЬ {sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}")
+        elif self._saving_threads:
+            parts.append("сохраняю запись…")
         if self.analysis_running:
             parts.append("ИИ: анализ идёт")
         elif self.pending_transcript:
@@ -379,9 +424,12 @@ class App:
             obs = self.last_obs
             mic = "микрофон: нет данных" if obs is None or obs.mic is None else (
                 "микрофон занят: " + ", ".join(sorted(obs.mic)) if obs.mic else "микрофон свободен")
-            self.substatus.config(text=(self.last_event_text + "   |   " if self.last_event_text else "") + mic)
+            self.substatus.config(text=(self.last_event_text + "   |   " if self.last_event_text else "") + mic
+                                  + self.recording_levels_text())
+            self.rec_btn.config(text="■ Остановить запись" if self.recorder is not None else "● Записать")
         except tk.TclError:
             pass
+        self.check_recording_health()
         self.refresh_analysis_button()
 
     def refresh_analysis_button(self):
@@ -391,6 +439,208 @@ class App:
             self.analyze_btn.config(state="disabled" if blocked else "normal")
         except (tk.TclError, AttributeError):
             pass
+
+    # ------------------------------------------------------------------
+    # Запись встречи
+    # ------------------------------------------------------------------
+    def load_settings(self):
+        try:
+            data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def save_settings(self):
+        try:
+            self.settings_path.write_text(json.dumps(self.settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as e:
+            self.log.warning("settings not saved: %s", e)
+
+    def toggle_record_setting(self):
+        self.settings["record_meetings"] = bool(self.record_meetings.get())
+        self.save_settings()
+        self.last_event_text = ("Встречи будут записываться автоматически." if self.record_meetings.get()
+                                else "Автоматическая запись встреч выключена. Кнопка «● Записать» работает.")
+        self.refresh_status()
+
+    def _journal_note(self, event, reason, initiator="auto", **extra):
+        entry = self.store.log({"prev": self.detector.state, "new": self.detector.state, "event": event,
+                                "reason": reason, "initiator": initiator, **extra})
+        self._insert_journal_row(entry, select=True)
+        self.log.info("%s | %s | %s", event, reason, extra)
+
+    def toggle_recording_button(self):
+        if self.recorder is not None:
+            self.stop_recording("Пользователь остановил запись", "user")
+        else:
+            self.start_recording("Пользователь начал запись", "user", by_meeting=self.detector.in_meeting)
+
+    def start_recording(self, reason, initiator="auto", by_meeting=False):
+        if self.recorder is not None:
+            return
+        cand = self.detector.candidate
+        meta = {"meeting": (cand.label or cand.app) if cand and cand.kind != "manual" else "",
+                "window": strip_browser_suffix(cand.title) if cand and cand.title else "",
+                "started_by": WHO.get(initiator, initiator), "app_version": APP_VERSION}
+        rec = rec_mod.AudioRecorder(self.rec_folder)
+        try:
+            rec.start(meta)
+        except Exception as e:
+            self.log.exception("Запись не запущена")
+            self.last_event_text = f"Запись не запущена: {e}"
+            self._journal_note("Ошибка записи", f"Запись не запущена: {e}", initiator)
+            self.refresh_status()
+            return
+        self.recorder = rec
+        self.rec_by_meeting = by_meeting
+        self.rec_errors_seen = set()
+        self._journal_note("Запись начата", reason, initiator, file=rec.stem + ".wav")
+        self.last_event_text = "Запись начата. Левый канал — вы, правый — собеседники."
+        self.refresh_status()
+
+    def stop_recording(self, reason, initiator="auto", cut_at=None):
+        rec = self.recorder
+        if rec is None:
+            return
+        self.recorder = None
+        self.rec_by_meeting = False
+
+        def work():
+            try:
+                result = rec.stop(cut_at=cut_at)
+                error = ""
+            except Exception as e:
+                self.log.exception("Ошибка сохранения записи")
+                result, error = None, str(e)
+            self._ui_calls.put((self._recording_saved, (result, error, reason, initiator, th)))
+
+        th = threading.Thread(target=work, name="rec-save", daemon=True)
+        self._saving_threads.append(th)
+        th.start()
+        self.refresh_status()
+
+    def _recording_saved(self, result, error, reason, initiator, thread):
+        if thread in self._saving_threads:
+            self._saving_threads.remove(thread)
+        if result is None:
+            self.last_event_text = f"Ошибка сохранения записи: {error}"
+            self._journal_note("Ошибка записи", self.last_event_text, initiator)
+        else:
+            dur = int(result["duration"])
+            note = f"{reason}. Файл {result['path'].name}, {dur // 60} мин {dur % 60} с"
+            if result["trimmed"] >= 1:
+                note += f"; убрано {int(result['trimmed'])} с тишины после встречи"
+            if result["errors"]:
+                note += ". Предупреждения: " + "; ".join(result["errors"])
+            self.last_event_text = "Запись сохранена: " + result["path"].name
+            self._journal_note("Запись сохранена", note, initiator, file=result["path"].name)
+        self.refresh_records()
+        self.refresh_status()
+
+    def recording_levels_text(self):
+        if self.recorder is None:
+            return ""
+        def bar(v):
+            n = max(0, min(5, int(round(v * 5))))
+            return "▮" * n + "▯" * (5 - n)
+        h = self.recorder.health()
+        parts = []
+        for name, label in (("mic", "вы"), ("system", "собеседники")):
+            info = h.get(name, {})
+            if info.get("error"):
+                parts.append(f"{label}: ошибка")
+            elif not info.get("started"):
+                parts.append(f"{label}: подключаю…")
+            else:
+                parts.append(f"{label} {bar(info.get('level', 0.0))}")
+        return "   |   запись: " + " · ".join(parts)
+
+    def check_recording_health(self):
+        if self.recorder is None:
+            return
+        for name, info in self.recorder.health().items():
+            err = info.get("error")
+            if err and err not in self.rec_errors_seen:
+                self.rec_errors_seen.add(err)
+                self._journal_note("Ошибка записи", err)
+                self.last_event_text = "Проблема с записью: " + err
+
+    def _recover_recordings(self):
+        try:
+            recovered = rec_mod.recover_unfinished(self.rec_folder)
+        except Exception:
+            self.log.exception("Ошибка восстановления записей")
+            return
+        if recovered:
+            names = ", ".join(p.name for p in recovered)
+            def done():
+                self._journal_note("Запись восстановлена",
+                                   f"После неожиданного закрытия программы сведены записи: {names}")
+                self.refresh_records()
+            self._ui_calls.put((done, ()))
+
+    # ------------------------------------------------------------------
+    # Вкладка «Записи»
+    # ------------------------------------------------------------------
+    def build_records_panel(self):
+        ok, why = rec_mod.available()
+        info = ("Встреча записывается автоматически, если стоит галочка «Записывать встречи»; "
+                "кнопка «● Записать» включает и выключает запись вручную. Файлы WAV хранятся только на этом "
+                f"компьютере: {self.rec_folder}. Левый канал — ваш микрофон, правый — звук компьютера (собеседники). "
+                "Предупреждайте участников встречи о записи.")
+        if not ok:
+            info += f"\n\nЗапись сейчас недоступна: {why}"
+        ttk.Label(self.tab_records, text=info, wraplength=1200, justify="left").pack(anchor="w", pady=(0, 8))
+        cols = [("when", "Дата и время", 150), ("duration", "Длительность", 100), ("meeting", "Встреча", 300),
+                ("size", "Размер", 90), ("note", "Примечание", 520)]
+        self.records_tree = ttk.Treeview(self.tab_records, columns=[c[0] for c in cols], show="headings", height=16)
+        for col, label, width in cols:
+            self.records_tree.heading(col, text=label)
+            self.records_tree.column(col, width=width, anchor="w")
+        self.records_tree.pack(fill="both", expand=True)
+        self.records_tree.bind("<Double-1>", lambda _e: self.play_selected_record())
+        bar = ttk.Frame(self.tab_records); bar.pack(fill="x", pady=8)
+        ttk.Button(bar, text="Воспроизвести", command=self.play_selected_record).pack(side="left")
+        ttk.Button(bar, text="Открыть папку", command=self.open_records_folder).pack(side="left", padx=5)
+        ttk.Button(bar, text="Обновить", command=self.refresh_records).pack(side="left", padx=5)
+        self.refresh_records()
+
+    def refresh_records(self):
+        if not hasattr(self, "records_tree"):
+            return
+        self.records_tree.delete(*self.records_tree.get_children())
+        for item in rec_mod.list_recordings(self.rec_folder):
+            stem = item["path"].stem
+            when = f"{stem[6:8]}.{stem[4:6]}.{stem[0:4]} {stem[9:11]}:{stem[11:13]}" if len(stem) >= 13 else stem
+            dur = int(item.get("duration_sec") or 0)
+            meeting = item.get("meeting") or ""
+            if item.get("window"):
+                meeting = (meeting + " · " if meeting else "") + item["window"]
+            notes = list(item.get("errors") or [])
+            if item.get("status") == "recovered":
+                notes.insert(0, "восстановлена после сбоя")
+            if item.get("trimmed_sec", 0) >= 1:
+                notes.append(f"убрано {int(item['trimmed_sec'])} с после встречи")
+            self.records_tree.insert("", "end", iid=str(item["path"]), values=(
+                when, f"{dur // 3600}:{dur % 3600 // 60:02d}:{dur % 60:02d}", meeting,
+                f"{item['size'] / (1024 * 1024):.1f} МБ", "; ".join(notes)))
+
+    def play_selected_record(self):
+        sel = self.records_tree.selection()
+        if not sel:
+            messagebox.showinfo("Записи", "Сначала выберите запись.")
+            return
+        try:
+            os.startfile(sel[0])  # type: ignore[attr-defined]
+        except (OSError, AttributeError) as e:
+            messagebox.showerror("Записи", f"Не удалось открыть файл: {e}")
+
+    def open_records_folder(self):
+        self.rec_folder.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(self.rec_folder))  # type: ignore[attr-defined]
+        except (OSError, AttributeError) as e:
+            messagebox.showerror("Записи", f"Не удалось открыть папку: {e}")
 
     # ------------------------------------------------------------------
     # Вкладка «Обучение»
@@ -617,6 +867,25 @@ class App:
             self.analysis_cancel.set()
             if self.prompt is not None:
                 self.prompt.destroy()
+            if self.recorder is not None or self._saving_threads:
+                try:
+                    self.status.config(text="Сохраняю запись, подождите…")
+                    self.root.update()
+                except tk.TclError:
+                    pass
+            if self.recorder is not None:
+                rec, self.recorder = self.recorder, None
+                try:
+                    result = rec.stop()
+                    self.log.info("recording saved on close: %s", result)
+                    self.store.log({"prev": self.detector.state, "new": self.detector.state,
+                                    "event": "Запись сохранена", "initiator": "user",
+                                    "reason": "Программа закрыта во время записи",
+                                    "file": result["path"].name if result else ""})
+                except Exception:
+                    self.log.exception("Ошибка сохранения записи при закрытии")
+            for th in list(self._saving_threads):
+                th.join(timeout=120)
         finally:
             self.root.destroy()
 
@@ -650,7 +919,7 @@ class App:
                     if not models: messagebox.showwarning("Модель не найдена", "Установи модель командой: ollama pull " + self.model.get().strip())
                 self.root.after(0, done)
             except Exception as e:
-                self.root.after(0, lambda err=str(e): messagebox.showerror("Ollama недоступна", "Не удалось подключиться к локальной Ollama.\n\nЗапусти setup_ollama.bat или проверь, что Ollama установлена.\n\nПодробности: " + err))
+                self.root.after(0, lambda err=str(e): messagebox.showerror("Ollama недоступна", "Не удалось подключиться к локальной Ollama.\n\nЗапусти setup.bat или проверь, что Ollama установлена.\n\nПодробности: " + err))
         threading.Thread(target=worker, daemon=True).start()
 
     def analyze(self):
