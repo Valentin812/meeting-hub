@@ -5,7 +5,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def note(title, text):
-    print(f"::notice title={title}::" + str(text).replace("%", "%25").replace("\n", "%0A"))
+    print(f"::notice title={title}::" + str(text).replace("%", "%25").replace("\n", "%0A"), flush=True)
 
 
 try:
@@ -32,6 +32,7 @@ try:
         res["loopback_read"] = got.get("n", "timeout")
     note("pa", res)
     import os
+    sys.stdout.flush()
     os._exit(0)
 except Exception:
     note("pa-failed", traceback.format_exc())
