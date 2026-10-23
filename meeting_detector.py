@@ -199,6 +199,7 @@ class MeetingDetector:
         self.suppress_auto = False     # после отмены/ручного завершения ждём, пока сигналы исчезнут
         self.seen_active = False       # во время встречи хотя бы раз видели сигналы
         self.inactive_since = None
+        self.last_active_at = None     # последний момент, когда сигналы встречи были видны
         self.last_mic_error = ""
         self.last_signals = {"strong": None, "weak": [], "hits": [], "mic": None}
 
@@ -366,6 +367,7 @@ class MeetingDetector:
             if self._is_active(hits, mic):
                 self.seen_active = True
                 self.inactive_since = None
+                self.last_active_at = now
             elif self.seen_active:
                 if self.inactive_since is None:
                     self.inactive_since = now
@@ -376,6 +378,7 @@ class MeetingDetector:
 
         elif self.state == ENDING:
             if self._is_active(hits, mic):
+                self.last_active_at = now
                 self.ending_until = None
                 self.inactive_since = None
                 out.append(self._go(IN_MEETING, "Встреча продолжается",
@@ -389,6 +392,7 @@ class MeetingDetector:
         # Если встреча началась по сигналу, он уже наблюдался: его исчезновение — повод спросить о конце.
         # После ручного старта без сигналов ждём, пока сигналы появятся, иначе встреча сразу «закончится».
         self.seen_active = self.candidate is not None and self.candidate.kind != "manual"
+        self.last_active_at = None
         self.inactive_since = None
         self.countdown_until = self.ask_until = self.ending_until = None
         return self._go(IN_MEETING, event, reason, initiator)

@@ -174,6 +174,16 @@ class Scenario6End(unittest.TestCase):
         self.assertEqual(s.run(60, windows=[MEET], mic={"chrome.exe"}), IDLE)
 
 
+class RecordingTrim(unittest.TestCase):
+    def test_last_active_time_marks_real_end_of_meeting(self):
+        s = in_meeting()
+        s.run(10, windows=[MEET], mic=set())
+        end_of_meeting = s.t
+        s.run(END_GRACE_SEC + END_CONFIRM_SEC + 2, windows=[], mic=set())
+        self.assertEqual(s.d.state, IDLE)
+        self.assertEqual(s.d.last_active_at, end_of_meeting)
+
+
 class Scenario7FalseEvent(unittest.TestCase):
     def test_ignore_pattern_stops_false_start(self):
         title = ("Google Meet - проверка микрофона - Google Chrome", "chrome.exe")

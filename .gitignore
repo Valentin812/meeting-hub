@@ -9,3 +9,5 @@ meeting_hub_training.before-import-*.json
 *.tmp
 build/
 dist/
+recordings/
+meeting_hub_audio_report.txt

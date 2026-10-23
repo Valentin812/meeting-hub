@@ -2,7 +2,12 @@
 setlocal
 title Meeting Hub Setup
 cd /d "%~dp0"
-rem Meeting Hub v5 needs no extra Python packages: meeting detection uses only Windows built-ins.
+echo Installing recording packages (numpy, PyAudioWPatch, soundcard)...
+python -m pip install --upgrade -r requirements.txt
+if errorlevel 1 (
+  echo Could not install recording packages. Meeting detection still works; recording will be unavailable.
+  pause
+)
 where ollama >nul 2>nul
 if errorlevel 1 (
   where winget >nul 2>nul

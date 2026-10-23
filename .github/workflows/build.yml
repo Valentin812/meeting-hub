@@ -1,0 +1,114 @@
+name: build exe
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  exe:
+    name: MeetingHub.exe (Python 3.12) + test on virtual sound card
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: LABSN/sound-ci-helpers@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install --upgrade -r requirements.txt pyinstaller
+
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path app.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name MeetingHub
+          --hidden-import audio_check --hidden-import pyaudiowpatch
+          --collect-data soundcard
+          app.py
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "MeetingHub-v${{ steps.ver.outputs.version }}-exe"
+          $dst = "pkg\$name"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item -Recurse dist\MeetingHub\* $dst
+          Copy-Item packaging\README_EXE.txt "$dst\ПРОЧТИ_МЕНЯ.txt"
+          Copy-Item packaging\audio_check.bat, packaging\setup_ollama.bat, README.txt, CHANGELOG.md, MANUAL_TEST.txt $dst
+          "name=$name" >> $env:GITHUB_ENV
+
+      - name: Test - audio check from exe
+        shell: pwsh
+        run: |
+          $dir = "pkg\$env:name"
+          Start-Process -FilePath "$dir\MeetingHub.exe" -ArgumentList "--audio-check" -Wait -WorkingDirectory $dir
+          $r = Get-Content "$dir\meeting_hub_audio_report.txt" -Encoding utf8
+          $r | Select-Object -First 40
+          $ok = ($r | Select-String '^\s*OK').Count
+          Write-Output "::notice title=exe audio_check::OK=$ok"
+          $sec = ($r | Select-String -Context 0,1 'Антивирусы' | ForEach-Object { $_.Context.PostContext }) -join ' '
+          Write-Output "::notice title=exe security::$sec"
+          if (-not ($r | Select-String 'Сторонние библиотеки')) { throw "report has no module section" }
+          if ($ok -lt 1) { throw "exe could not open any audio device" }
+          Remove-Item "$dir\meeting_hub_audio_report.txt"
+
+      - name: Test - record 4 s from exe while a tone plays
+        shell: pwsh
+        run: |
+          $dir = "pkg\$env:name"
+          $tone = Start-Process -FilePath python -ArgumentList "tests\play_tone.py", "15" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 2
+          if ($tone.HasExited) { throw "tone player exited early" }
+          Start-Process -FilePath "$dir\MeetingHub.exe" -ArgumentList "--record-test", "4" -Wait -WorkingDirectory $dir
+          Stop-Process -Id $tone.Id -ErrorAction SilentlyContinue
+          $j = Get-Content "$dir\record_test.json" -Encoding utf8 | ConvertFrom-Json
+          Write-Output "::notice title=exe record_test::duration=$($j.duration) system_peak=$($j.system_peak) mic_peak=$($j.mic_peak) errors=$($j.errors)"
+          if ($j.system_peak -lt 1000) { throw "computer sound was not recorded by the exe" }
+          if ([math]::Abs($j.duration - 4) -gt 0.5) { throw "wrong duration" }
+          Remove-Item -Recurse "$dir\recordings", "$dir\record_test.json"
+
+      - name: Test - GUI starts and stays up
+        shell: pwsh
+        run: |
+          $dir = "pkg\$env:name"
+          Copy-Item tests\data\meeting_hub_training_v49.json "$dir\meeting_hub_training.json"
+          $p = Start-Process -FilePath "$dir\MeetingHub.exe" -WorkingDirectory $dir -PassThru
+          Start-Sleep -Seconds 12
+          if ($p.HasExited) { throw "MeetingHub.exe exited early with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id
+          if (-not (Test-Path "$dir\meeting_hub.log")) { throw "no log file" }
+          if (-not (Get-ChildItem "$dir\meeting_hub_training.v4-backup-*.json")) { throw "training data was not migrated" }
+          Write-Output "::notice title=exe gui::started, log created, v4.9 data migrated"
+          Remove-Item "$dir\meeting_hub_training*.json", "$dir\meeting_hub.log*"
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path "pkg\$env:name" -DestinationPath "pkg\$env:name.zip"
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true   # хранилище артефактов может быть заполнено; основной канал — релиз
+        with:
+          name: ${{ env.name }}
+          path: pkg/${{ env.name }}.zip
+
+      - name: Publish as GitHub pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.version }}"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --prerelease --target $env:GITHUB_SHA --title "Meeting Hub $tag (exe)" --notes "Готовая программа для Windows: распакуйте и запустите MeetingHub.exe. Сборка из коммита $env:GITHUB_SHA."
+          }
+          gh release upload $tag "pkg\$env:name.zip" --clobber
