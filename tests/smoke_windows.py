@@ -152,6 +152,9 @@ def check_ui():
         def open(self, name, rate):
             return FakeSource()
 
+        def close(self):
+            pass
+
     app_mod.rec_mod.AutoBackend = FakeBackend
     root = tk.Tk()
     app = app_mod.App(root)

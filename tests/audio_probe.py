@@ -47,9 +47,12 @@ def main():
     for kind in ("mic", "system"):
         try:
             src = recorder.AutoBackend().open(kind, 16000)
-            block = src.read(4000)
+            got = 0
+            for _ in range(10):
+                block = src.read(4000)
+                got += 0 if block is None else len(block)
             src.close()
-            results[f"backend {kind}"] = f"ok {src.config} len={len(block)}"
+            results[f"backend {kind}"] = f"ok {src.config} frames={got}"
         except Exception as e:
             results[f"backend {kind}"] = str(e)[:200]
     note("raw-soundcard", results)
@@ -71,7 +74,9 @@ def main():
     th = threading.Thread(target=play, daemon=True)
     th.start()
     time.sleep(0.5)
-    note("self_test", recorder.self_test(2.0))
+    st = recorder.self_test(2.0)
+    note("self_test", {k: (v.get("config") or v.get("error"), round(v.get("seconds", 0), 2), round(v.get("peak", 0), 3))
+                       for k, v in st.items()})
     note("self_test_soundcard_only", recorder.self_test(1.0, recorder.SoundcardBackend()))
     rec = recorder.AudioRecorder(Path(os.environ.get("RUNNER_TEMP", ".")) / "rec")
     rec.start({"meeting": "ci"})
