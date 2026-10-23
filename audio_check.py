@@ -101,6 +101,34 @@ def main():
     except Exception:
         out("Список устройств: ОШИБКА\n      " + short_tb())
 
+    out("\n--- PortAudio (PyAudioWPatch) ---")
+    try:
+        sys.path.insert(0, str(HERE))
+        import recorder
+        import numpy as np
+        b = recorder.PortAudioBackend()
+        for i in range(b.pa.get_device_count()):
+            d = b.pa.get_device_info_by_index(i)
+            api = b.pa.get_host_api_info_by_index(d["hostApi"])["name"]
+            if d["maxInputChannels"] > 0:
+                out(f"  [{api}] {d['name']} | вх. каналов {d['maxInputChannels']} | {int(d['defaultSampleRate'])} Гц")
+        import time
+        for name, label in (("mic", "микрофон"), ("system", "звук компьютера")):
+            try:
+                src = b.open(name, 16000)
+                got, peak, end = 0, 0.0, time.time() + 1.5
+                while time.time() < end:
+                    blk = src.read(4000)
+                    if blk is not None and len(blk):
+                        got += len(blk); peak = max(peak, float(np.abs(blk).max()))
+                src.close()
+                out(f"  {label}: OK  {src.config}, получено {got / 16000:.1f} с, пик {peak:.3f}")
+            except Exception:
+                out(f"  {label}: ОШИБКА\n      " + short_tb())
+        b.close()
+    except Exception:
+        out("PortAudio: ОШИБКА\n      " + short_tb())
+
     out("\n--- Главный поток ---")
     check_devices("")
 

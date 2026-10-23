@@ -46,7 +46,7 @@ def main():
             results[label] = traceback.format_exc().strip().splitlines()[-3:]
     for kind in ("mic", "system"):
         try:
-            src = recorder.SoundcardBackend().open(kind, 16000)
+            src = recorder.AutoBackend().open(kind, 16000)
             block = src.read(4000)
             src.close()
             results[f"backend {kind}"] = f"ok {src.config} len={len(block)}"
@@ -72,6 +72,7 @@ def main():
     th.start()
     time.sleep(0.5)
     note("self_test", recorder.self_test(2.0))
+    note("self_test_soundcard_only", recorder.self_test(1.0, recorder.SoundcardBackend()))
     rec = recorder.AudioRecorder(Path(os.environ.get("RUNNER_TEMP", ".")) / "rec")
     rec.start({"meeting": "ci"})
     time.sleep(3)

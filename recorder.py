@@ -201,10 +201,144 @@ def describe_error(e):
     return text
 
 
+class PortAudioBackend:
+    """Запись через PyAudioWPatch (PortAudio): микрофон через WASAPI/MME/DirectSound,
+    звук компьютера — WASAPI loopback. Работает в режиме обратного вызова, чтение никогда не зависает.
+    """
+
+    def __init__(self):
+        try:
+            import pyaudiowpatch as pyaudio
+        except Exception as e:
+            raise RecorderError(f"PyAudioWPatch не установлен ({e}). Запустите setup.bat") from e
+        self.pyaudio = pyaudio
+        self.pa = pyaudio.PyAudio()
+        self.lock = threading.Lock()
+
+    def _mic_candidates(self):
+        pa, p = self.pyaudio, self.pa
+        seen = set()
+        for api_type, api_name in ((pa.paWASAPI, "WASAPI"), (pa.paMME, "MME"), (pa.paDirectSound, "DirectSound")):
+            try:
+                api = p.get_host_api_info_by_type(api_type)
+                info = p.get_device_info_by_index(api["defaultInputDevice"])
+            except Exception:
+                continue
+            if info["index"] not in seen and info.get("maxInputChannels", 0) > 0:
+                seen.add(info["index"])
+                yield api_name, info
+
+    def _loopback_candidates(self):
+        try:
+            yield "WASAPI loopback", self.pa.get_default_wasapi_loopback()
+        except Exception:
+            pass
+
+    def open(self, name, rate):
+        errors = []
+        cands = list(self._mic_candidates() if name == "mic" else self._loopback_candidates())
+        if not cands:
+            raise RecorderError("устройство по умолчанию не найдено" if name == "mic"
+                                else "не найден loopback для динамиков по умолчанию")
+        for api, info in cands:
+            try:
+                with self.lock:
+                    src = _PortAudioSource(self, info, rate)
+                src.config = f"PortAudio {api}: {src.dev_rate} Гц, каналов {src.channels}"
+                src.tried = errors
+                return src
+            except Exception as e:
+                errors.append(f"{api}: {describe_error(e)}")
+        raise RecorderError(f"{cands[0][1].get('name', name)}: " + " | ".join(errors))
+
+    def close(self):
+        try:
+            self.pa.terminate()
+        except Exception:
+            pass
+
+
+class _PortAudioSource:
+    def __init__(self, backend, info, rate):
+        pa = backend.pyaudio
+        self.device = info.get("name", "")
+        self.channels = max(1, min(int(info.get("maxInputChannels", 1)), 2))
+        self.dev_rate = int(info.get("defaultSampleRate", 48000))
+        self.rate = rate
+        self.q = queue.Queue(maxsize=600)
+
+        def callback(in_data, frame_count, time_info, status):
+            try:
+                self.q.put_nowait(in_data)
+            except queue.Full:
+                pass
+            return (None, pa.paContinue)
+
+        self.stream = backend.pa.open(format=pa.paFloat32, channels=self.channels, rate=self.dev_rate,
+                                      input=True, input_device_index=info["index"],
+                                      frames_per_buffer=max(256, self.dev_rate // 20),
+                                      stream_callback=callback)
+        self.stream.start_stream()
+
+    def read(self, frames):
+        try:
+            data = self.q.get(timeout=0.5)
+        except queue.Empty:
+            return None          # тишина в loopback: данных нет — заполнит выравнивание по часам
+        arr = np.frombuffer(data, dtype=np.float32)
+        if self.channels > 1:
+            arr = arr.reshape(-1, self.channels).mean(axis=1)
+        return resample(arr, self.dev_rate, self.rate)
+
+    def close(self):
+        try:
+            self.stream.stop_stream()
+            self.stream.close()
+        except Exception:
+            pass
+
+
+class AutoBackend:
+    """Пробует PortAudio, затем soundcard — для каждого источника отдельно."""
+
+    def __init__(self):
+        self.backends = []
+        self.init_errors = []
+        for cls in (PortAudioBackend, SoundcardBackend):
+            try:
+                self.backends.append(cls())
+            except RecorderError as e:
+                self.init_errors.append(str(e))
+        if not self.backends:
+            raise RecorderError("; ".join(self.init_errors))
+
+    def thread_enter(self):
+        return SoundcardBackend.thread_enter()
+
+    def thread_exit(self, token):
+        SoundcardBackend.thread_exit(token)
+
+    def open(self, name, rate):
+        errors = []
+        for b in self.backends:
+            try:
+                return b.open(name, rate)
+            except Exception as e:
+                errors.append(f"[{type(b).__name__.replace('Backend', '')}] "
+                              + (str(e) if isinstance(e, RecorderError) else describe_error(e)))
+        raise RecorderError(" ; ".join(errors))
+
+    def close(self):
+        for b in self.backends:
+            close = getattr(b, "close", None)
+            if close:
+                close()
+
+
 def available():
     """(True, '') если запись возможна, иначе (False, причина)."""
     try:
-        SoundcardBackend()
+        AutoBackend().close()
         return True, ""
     except RecorderError as e:
         return False, str(e)
@@ -278,7 +412,7 @@ class AudioRecorder:
         if free < MIN_FREE_BYTES:
             raise RecorderError(f"мало места на диске: свободно {free // (1024 * 1024)} МБ")
         if self.backend is None:
-            self.backend = SoundcardBackend()
+            self.backend = AutoBackend()
         self.stem = datetime.now().strftime("%Y%m%d_%H%M%S")
         n = 1
         while (self.folder / f"{self.stem}.wav").exists() or (self.folder / f"{self.stem}.json").exists():
@@ -402,6 +536,12 @@ class AudioRecorder:
                 if tr.frames < target:
                     tr.write_silence(target - tr.frames)
                 tr.close()
+        close = getattr(self.backend, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                pass
         out = self.folder / f"{self.stem}.wav"
         merge_tracks(self.tracks["mic"].path, self.tracks["system"].path, out, target, self.rate)
         for tr in self.tracks.values():
@@ -533,7 +673,7 @@ def list_recordings(folder):
 
 def self_test(seconds=3.0, backend=None):
     """Короткая пробная запись в памяти: что слышно с каждого источника. Для кнопки «Проверить запись»."""
-    backend = backend or SoundcardBackend()
+    backend = backend or AutoBackend()
     results = {}
 
     def run(name):
@@ -576,6 +716,12 @@ def self_test(seconds=3.0, backend=None):
         th.start()
     for th in threads:
         th.join(timeout=seconds + 8)
+    close = getattr(backend, "close", None)
+    if close is not None:
+        try:
+            close()
+        except Exception:
+            pass
     for n in SOURCES:
         results.setdefault(n, {"device": "", "error": "данных нет — во время проверки на компьютере ничего не звучало?",
                                "seconds": 0.0, "peak": 0.0, "rms": 0.0})

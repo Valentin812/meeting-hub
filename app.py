@@ -98,7 +98,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.1.3"
+APP_VERSION = "5.1.4"
 TICK_MS = 1000
 
 WHO = {"auto": "Автоматика", "user": "Пользователь", "legacy": "v4.9 (архив)"}
@@ -633,7 +633,7 @@ class App:
             messagebox.showinfo("Проверка записи", "Сейчас идёт запись. Проверку можно запустить после неё.")
             return
         try:
-            backend = rec_mod.SoundcardBackend()
+            backend = rec_mod.AutoBackend()
         except rec_mod.RecorderError as e:
             messagebox.showerror("Проверка записи", str(e))
             return

@@ -152,7 +152,7 @@ def check_ui():
         def open(self, name, rate):
             return FakeSource()
 
-    app_mod.rec_mod.SoundcardBackend = FakeBackend
+    app_mod.rec_mod.AutoBackend = FakeBackend
     root = tk.Tk()
     app = app_mod.App(root)
     seen = []
