@@ -98,14 +98,10 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.2.2"
+APP_VERSION = "5.3.0"
 
-
-def app_dir():
-    """Папка программы: рядом с MeetingHub.exe в сборке, рядом с app.py при запуске из исходников."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+import support
+from support import app_dir, data_dir
 TICK_MS = 1000
 
 WHO = {"auto": "Автоматика", "user": "Пользователь", "legacy": "v4.9 (архив)"}
@@ -213,13 +209,174 @@ class MeetingPrompt(tk.Toplevel):
             self.destroy()
 
 
+class FirstRunWizard(tk.Toplevel):
+    """Мастер настройки: перенос данных старой версии, проверка записи с инструкцией, согласие на запись."""
+
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.app = app
+        self.title("Meeting Hub — настройка")
+        self.geometry("760x720")
+        self.transient(app.root)
+        self.protocol("WM_DELETE_WINDOW", self.finish)
+        box = ttk.Frame(self, padding=16)
+        box.pack(fill="both", expand=True)
+        ttk.Label(box, text=f"Добро пожаловать в Meeting Hub {APP_VERSION}", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(box, wraplength=720, justify="left", text=(
+            "Программа сама замечает начало онлайн-встречи, записывает её и помогает подвести итоги. "
+            f"Все данные хранятся только на этом компьютере: {app.data_dir}")).pack(anchor="w", pady=(4, 12))
+
+        # 1. Перенос данных
+        self.old = [p for p in support.find_old_versions() if p.resolve() != app.data_dir.resolve()]
+        mig = ttk.LabelFrame(box, text="1. Данные предыдущей версии", padding=10)
+        mig.pack(fill="x", pady=(0, 10))
+        has_data = bool(app.store.meeting_patterns() or app.store.data.get("journal"))
+        hint = ("Найдены папки старых версий. Перенесите шаблоны встреч, журнал и записи — исходная папка не меняется."
+                if self.old else "Если раньше пользовались Meeting Hub из ZIP-архива, укажите его папку.")
+        if has_data:
+            hint = "Данные уже есть. Можно дополнительно перенести из другой папки."
+        ttk.Label(mig, text=hint, wraplength=700, justify="left").pack(anchor="w")
+        row = ttk.Frame(mig); row.pack(fill="x", pady=(6, 0))
+        self.old_var = tk.StringVar(value=str(self.old[0]) if self.old else "")
+        ttk.Combobox(row, textvariable=self.old_var, values=[str(p) for p in self.old], width=70).pack(side="left")
+        ttk.Button(row, text="Обзор…", command=self.browse).pack(side="left", padx=4)
+        ttk.Button(row, text="Перенести", command=self.migrate).pack(side="left")
+        self.mig_status = ttk.Label(mig, text="")
+        self.mig_status.pack(anchor="w", pady=(4, 0))
+
+        # 2. Проверка записи
+        chk = ttk.LabelFrame(box, text="2. Проверка записи", padding=10)
+        chk.pack(fill="both", expand=True, pady=(0, 10))
+        ttk.Label(chk, wraplength=700, justify="left", text=(
+            "Нажмите «Проверить»: 5 секунд говорите в микрофон и включите любое видео со звуком. "
+            "Если что-то мешает записи, здесь появится инструкция именно для вашего случая.")).pack(anchor="w")
+        row2 = ttk.Frame(chk); row2.pack(fill="x", pady=6)
+        self.check_btn = ttk.Button(row2, text="Проверить", command=self.run_check)
+        self.check_btn.pack(side="left")
+        self.settings_btn = ttk.Button(row2, text="Открыть настройки Windows", command=self.open_settings)
+        self.support_btn = ttk.Button(row2, text="Сохранить отчёт для поддержки…", command=app.save_support_bundle)
+        self.support_btn.pack(side="right")
+        self.result = tk.Text(chk, height=12, wrap="word", font=("Segoe UI", 10))
+        self.result.pack(fill="both", expand=True)
+        self.result.insert("1.0", "Проверка ещё не запускалась.")
+        self.result.config(state="disabled")
+        self.settings_uri = ""
+
+        # 3. Согласие на запись
+        cons = ttk.LabelFrame(box, text="3. Запись встреч", padding=10)
+        cons.pack(fill="x")
+        self.consent = tk.BooleanVar(value=bool(app.settings.get("recording_consent")))
+        ttk.Checkbutton(cons, variable=self.consent, text=(
+            "Я буду предупреждать участников встреч о записи (запись включается вместе со встречей)")).pack(anchor="w")
+        ttk.Label(cons, foreground="#666", wraplength=700, justify="left", text=(
+            "Без этой отметки встречи обнаруживаются, но не записываются. Изменить можно в любой момент "
+            "галочкой «Записывать встречи».")).pack(anchor="w")
+
+        ttk.Button(box, text="Готово", command=self.finish).pack(side="right", pady=(12, 0))
+
+    def browse(self):
+        folder = filedialog.askdirectory(parent=self, title="Папка предыдущей версии Meeting Hub")
+        if folder:
+            self.old_var.set(folder)
+
+    def migrate(self):
+        folder = self.old_var.get().strip()
+        if not folder or not Path(folder).is_dir():
+            self.mig_status.config(text="Укажите папку предыдущей версии.")
+            return
+        try:
+            done = support.import_from(folder, self.app.data_dir)
+        except OSError as e:
+            self.mig_status.config(text=f"Не удалось перенести: {e}")
+            return
+        if not done:
+            self.mig_status.config(text="Переносить нечего: данные уже есть или папка пуста.")
+            return
+        self.app.reload_data()
+        self.app._journal_note("Данные перенесены", f"Из папки {folder}: " + ", ".join(done), "user")
+        self.mig_status.config(text="Перенесено: " + ", ".join(done))
+
+    def set_result(self, text):
+        self.result.config(state="normal")
+        self.result.delete("1.0", "end")
+        self.result.insert("1.0", text)
+        self.result.config(state="disabled")
+
+    def run_check(self):
+        if self.app.recorder is not None:
+            self.set_result("Сейчас идёт запись встречи. Проверку можно запустить после неё.")
+            return
+        self.check_btn.config(state="disabled", text="Проверяю… говорите и включите звук")
+        self.settings_btn.pack_forget()
+        self.set_result("Идёт проверка, 5 секунд…")
+
+        def work():
+            try:
+                res = rec_mod.self_test(5.0, rec_mod.AutoBackend())
+            except Exception as e:
+                res = {"error": rec_mod.describe_error(e)}
+            code, guide = self.app.diagnose(res)
+            self.app._ui_calls.put((self.check_done, (res, code, guide)))
+        threading.Thread(target=work, name="first-run-check", daemon=True).start()
+
+    def check_done(self, res, code, guide):
+        if not self.winfo_exists():
+            return
+        self.check_btn.config(state="normal", text="Проверить ещё раз")
+        lines = []
+        for name, label in (("mic", "Микрофон (вы)"), ("system", "Звук компьютера (собеседники)")):
+            info = res.get(name, {"error": res.get("error", "")})
+            if info.get("error"):
+                lines.append(f"✗ {label}: не записывается")
+            else:
+                loud = "слышно" if info.get("peak", 0) > 0.02 else "тишина — говорите / включите звук громче"
+                lines.append(f"✓ {label}: {info.get('device', '')} — {loud}")
+        if guide:
+            lines += ["", support.guide_text(guide)]
+            self.settings_uri = guide.get("settings_uri", "")
+            if self.settings_uri:
+                self.settings_btn.pack(side="left", padx=6)
+        else:
+            lines += ["", "Запись работает."]
+        self.set_result("\n".join(lines))
+        self.app.log.info("first-run check: %s; diagnosis: %s", res, code)
+        self.app._journal_note("Проверка записи (мастер)", "; ".join(l for l in lines[:2]), "user")
+
+    def open_settings(self):
+        if self.settings_uri:
+            try:
+                os.startfile(self.settings_uri)  # type: ignore[attr-defined]
+            except (OSError, AttributeError):
+                pass
+
+    def finish(self):
+        consent = bool(self.consent.get())
+        self.app.settings["recording_consent"] = consent
+        if not consent:
+            self.app.settings["record_meetings"] = False
+            self.app.record_meetings.set(False)
+        self.app.settings["first_run_done"] = True
+        self.app.save_settings()
+        self.app.wizard = None
+        self.destroy()
+
+
 class App:
     def __init__(self, root):
         self.root = root
         root.title(f"Meeting Hub v{APP_VERSION}")
         root.geometry("1360x900")
-        here = app_dir()
+        here = data_dir()
+        self.data_dir = here
         self.log = setup_logging(here)
+        imported = []
+        if app_dir() != here and support.has_user_data(app_dir()) and \
+                not (here / "meeting_hub_training.json").exists():
+            # Пользователь положил данные старой версии рядом с MeetingHub.exe — забираем их в профиль.
+            try:
+                imported = support.import_from(app_dir(), here)
+            except OSError as e:
+                self.log.warning("import from app dir failed: %s", e)
         self.project_path = ""
         self.transcript_path = ""
         self.store = TrainingStore(here / "meeting_hub_training.json")
@@ -240,6 +397,7 @@ class App:
         self.rec_errors_seen = set()
         self._saving_threads = []
         self._ui_calls = queue.Queue()   # результаты фоновых потоков выполняются в потоке интерфейса
+        self.wizard = None
 
         header = ttk.Frame(root, padding=10); header.pack(fill="x")
         ttk.Label(header, text="MEETING HUB", font=("Segoe UI", 18, "bold")).pack(side="left")
@@ -307,6 +465,10 @@ class App:
         if self.store.notices:
             self.last_event_text = " ".join(self.store.notices)
             self.log.info("store: %s", self.last_event_text)
+        if imported:
+            self._journal_note("Данные перенесены", "Из папки программы в профиль пользователя: " + ", ".join(imported))
+        if not self.settings.get("first_run_done"):
+            self.root.after(600, self.open_first_run)
         self._tick_job = self.root.after(800, self.tick)
         threading.Thread(target=self._recover_recordings, daemon=True).start()
 
@@ -482,8 +644,28 @@ class App:
         else:
             self.start_recording("Пользователь начал запись", "user", by_meeting=self.detector.in_meeting)
 
+    def ensure_recording_consent(self):
+        if self.settings.get("recording_consent"):
+            return True
+        ok = messagebox.askyesno(
+            "Запись встреч",
+            "Meeting Hub записывает ваш голос и голоса собеседников в файл на этом компьютере.\n\n"
+            "Во многих странах, в том числе в России, участников нужно предупреждать о записи "
+            "разговора. Вы будете предупреждать участников встреч?\n\n"
+            "«Да» — разрешить запись. «Нет» — запись выключена (её можно включить позже).",
+            parent=self.root)
+        self.settings["recording_consent"] = bool(ok)
+        if not ok:
+            self.settings["record_meetings"] = False
+            self.record_meetings.set(False)
+        self.save_settings()
+        return ok
+
     def start_recording(self, reason, initiator="auto", by_meeting=False):
         if self.recorder is not None:
+            return
+        if not self.ensure_recording_consent():
+            self._journal_note("Запись не начата", "Нет согласия с условием предупреждать участников", initiator)
             return
         cand = self.detector.candidate
         meta = {"meeting": (cand.label or cand.app) if cand and cand.kind != "manual" else "",
@@ -617,6 +799,8 @@ class App:
         self.test_btn = ttk.Button(bar, text="Проверить запись (5 с)", command=self.test_recording)
         self.test_btn.pack(side="right")
         ttk.Button(bar, text="Подробная проверка звука…", command=self.full_audio_check).pack(side="right", padx=5)
+        ttk.Button(bar, text="Отчёт для поддержки…", command=self.save_support_bundle).pack(side="right", padx=5)
+        ttk.Button(bar, text="Мастер настройки…", command=self.open_first_run).pack(side="right", padx=5)
         self.refresh_records()
 
     def refresh_records(self):
@@ -676,23 +860,29 @@ class App:
                     loud = "слышно" if info.get("peak", 0) > 0.02 else "тишина"
                     lines.append(f"  получено {info.get('seconds', 0):.1f} с звука, пик {info.get('peak', 0):.2f} — {loud}")
             text = "\n".join(lines)
-        if all(res.get(n, {}).get("error") for n in ("mic", "system")):
-            hint = rec_mod.blocker_hint()
-            if hint:
-                text += "\n\n" + hint
-        self.log.info("recording self-test: %s", res)
+        code, guide = self.diagnose(res)
+        if guide:
+            text += "\n\n" + support.guide_text(guide)
+        self.log.info("recording self-test: %s; diagnosis: %s", res, code)
         self._journal_note("Проверка записи", text.replace("\n", " "), "user")
         messagebox.showinfo("Проверка записи", text)
 
-    def full_audio_check(self):
+    def diagnose(self, res):
+        if "mic" not in res:
+            res = {"mic": {"error": res.get("error", "")}, "system": {"error": res.get("error", "")}}
+        return support.diagnose(res, kaspersky_loaded=bool(rec_mod.blocker_hint()),
+                                privacy=support.microphone_privacy(),
+                                security=support.running_security_software())
+
+    def full_audio_check(self, then=None):
         if self.recorder is not None:
             messagebox.showinfo("Проверка звука", "Сейчас идёт запись. Проверку можно запустить после неё.")
             return
-        report = app_dir() / "meeting_hub_audio_report.txt"
+        report = self.data_dir / "meeting_hub_audio_report.txt"
         if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "--audio-check"]
+            cmd = [sys.executable, "--audio-check", str(report)]
         else:
-            cmd = [sys.executable.replace("pythonw.exe", "python.exe"), str(app_dir() / "audio_check.py")]
+            cmd = [sys.executable.replace("pythonw.exe", "python.exe"), str(app_dir() / "audio_check.py"), str(report)]
         self.last_event_text = "Подробная проверка звука: около 10 секунд…"
         self.refresh_status()
 
@@ -703,7 +893,7 @@ class App:
                 error = ""
             except Exception as e:
                 error = str(e)
-            self._ui_calls.put((self._full_check_done, (report, error)))
+            self._ui_calls.put((then or self._full_check_done, (report, error)))
         threading.Thread(target=work, name="audio-check", daemon=True).start()
 
     def _full_check_done(self, report, error):
@@ -732,6 +922,54 @@ class App:
             os.startfile(str(self.rec_folder))  # type: ignore[attr-defined]
         except (OSError, AttributeError) as e:
             messagebox.showerror("Записи", f"Не удалось открыть папку: {e}")
+
+    # ------------------------------------------------------------------
+    # Мастер настройки и поддержка
+    # ------------------------------------------------------------------
+    def open_first_run(self):
+        if getattr(self, "wizard", None) is not None and self.wizard.winfo_exists():
+            self.wizard.lift()
+            return
+        self.wizard = FirstRunWizard(self)
+
+    def reload_data(self):
+        """Перечитать данные обучения после переноса из старой версии."""
+        self.store = TrainingStore(self.data_dir / "meeting_hub_training.json")
+        self.detector.set_patterns(self.store.meeting_patterns(), self.store.ignore_patterns())
+        for row in self.training_tree.get_children():
+            self.training_tree.delete(row)
+        for i, ev in enumerate(self.store.legacy_events()[-250:]):
+            self.training_tree.insert("", "end", iid=f"legacy-{i}", values=(
+                ev.get("time", ""), WHO["legacy"], ev.get("event", ""), ev.get("detail", "")[:200],
+                ev.get("source", ""), ev.get("feedback", "")))
+        for entry in self.store.data["journal"][-500:]:
+            self._insert_journal_row(entry)
+        self.refresh_training_summary()
+        self.refresh_records()
+
+    def save_support_bundle(self):
+        target = filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=".zip",
+            initialfile=f"MeetingHub-support-{support.now_stamp()}.zip", filetypes=[("ZIP", "*.zip")],
+            title="Сохранить отчёт для поддержки (без записей и расшифровок)")
+        if not target:
+            return
+        self.last_event_text = "Собираю отчёт для поддержки: проверка звука, около 20 секунд…"
+        self.refresh_status()
+
+        def bundle(report, error):
+            try:
+                path = support.support_bundle(target, self.data_dir, APP_VERSION, report,
+                                              {"audio_check_error": error} if error else None)
+                self.last_event_text = f"Отчёт для поддержки сохранён: {path}"
+                messagebox.showinfo("Отчёт для поддержки",
+                                    f"Сохранено: {path}\n\nОтправьте этот файл разработчику. "
+                                    "Записи встреч и расшифровки в него не входят.", parent=self.root)
+            except OSError as e:
+                messagebox.showerror("Отчёт для поддержки", f"Не удалось сохранить: {e}", parent=self.root)
+            self.refresh_status()
+
+        self.full_audio_check(then=bundle)
 
     # ------------------------------------------------------------------
     # Вкладка «Обучение»
@@ -1130,7 +1368,7 @@ class App:
 
 def cli_record(seconds):
     """MeetingHub.exe --record-test N: записать N секунд без окна (для проверки сборки)."""
-    rec = rec_mod.AudioRecorder(app_dir() / "recordings")
+    rec = rec_mod.AudioRecorder(data_dir() / "recordings")
     rec.start({"meeting": "проверка сборки", "app_version": APP_VERSION})
     time.sleep(seconds)
     result = rec.stop()
@@ -1141,7 +1379,7 @@ def cli_record(seconds):
     summary = {"file": result["path"].name, "duration": round(result["duration"], 2), "errors": result["errors"],
                "mic_peak": int(np.abs(frames[:, 0]).max()) if len(frames) else 0,
                "system_peak": int(np.abs(frames[:, 1]).max()) if len(frames) else 0}
-    (app_dir() / "record_test.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (data_dir() / "record_test.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 
 
@@ -1149,7 +1387,14 @@ def main():
     args = sys.argv[1:]
     if args[:1] == ["--audio-check"]:
         import audio_check
-        audio_check.run(app_dir() / "meeting_hub_audio_report.txt")
+        report = Path(args[1]) if len(args) > 1 and not args[1].startswith("--") else \
+            data_dir() / "meeting_hub_audio_report.txt"
+        audio_check.run(report)
+        if "--open" in args:
+            try:
+                os.startfile(str(report))  # type: ignore[attr-defined]
+            except (OSError, AttributeError):
+                pass
         return
     if args[:1] == ["--record-test"]:
         cli_record(float(args[1]) if len(args) > 1 else 3.0)

@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: python -m pip install numpy
       - name: Syntax
-        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py audio_check.py
+        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py audio_check.py support.py
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
@@ -42,7 +42,18 @@ jobs:
       - name: Install (as setup.bat does)
         run: python -m pip install --upgrade -r requirements.txt
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        shell: pwsh
+        run: |
+          $env:PYTHONIOENCODING = "utf-8"
+          python -m unittest discover -s tests -v 2>&1 | Tee-Object -FilePath ut.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $t = (Get-Content ut.txt -Encoding utf8 -Raw)
+            $i = $t.IndexOf("======")
+            $msg = $t.Substring([Math]::Max(0, $i)).Replace("%", "%25").Replace("`r", "").Replace("`n", "%0A")
+            Write-Output "::error title=unit tests::$($msg.Substring(0, [Math]::Min(6000, $msg.Length)))"
+            exit 1
+          }
       - name: Windows API and UI smoke test
         run: python tests/smoke_windows.py
 

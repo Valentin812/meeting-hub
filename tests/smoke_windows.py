@@ -127,9 +127,12 @@ def check_com_order():
 def check_ui():
     # Работаем на копии, чтобы не трогать файл обучения в репозитории.
     work = Path(tempfile.mkdtemp())
-    for name in ("app.py", "meeting_detector.py", "win_signals.py", "training_store.py", "recorder.py"):
+    for name in ("app.py", "meeting_detector.py", "win_signals.py", "training_store.py", "recorder.py",
+                 "support.py", "audio_check.py"):
         shutil.copy(ROOT / name, work / name)
     shutil.copy(ROOT / "tests" / "data" / "meeting_hub_training_v49.json", work / "meeting_hub_training.json")
+    # Первый запуск: мастер откроется сам; согласие на запись даём заранее, чтобы не было модального вопроса.
+    (work / "meeting_hub_settings.json").write_text('{"recording_consent": true}', encoding="utf-8")
     sys.path.insert(0, str(work))
     import tkinter as tk
     import importlib
@@ -168,6 +171,9 @@ def check_ui():
         if app._tick_job is not None:
             root.after_cancel(app._tick_job)
             app._tick_job = None
+        assert app.wizard is not None and app.wizard.winfo_exists(), "мастер первого запуска не открылся"
+        app.wizard.finish()
+        assert app.settings.get("first_run_done") and app.wizard is None
         det = app.detector
         for kind in (COUNTDOWN, ASKING, ENDING):
             det.state = kind
