@@ -98,7 +98,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.1.2"
+APP_VERSION = "5.1.3"
 TICK_MS = 1000
 
 WHO = {"auto": "Автоматика", "user": "Пользователь", "legacy": "v4.9 (архив)"}

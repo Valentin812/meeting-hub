@@ -254,6 +254,40 @@ class Helpers(Base):
 
 
 class FormatFallback(Base):
+    def setUp(self):
+        super().setUp()
+        self._native = rec_mod.native_recorder
+
+        def no_native(dev, buffer_hns=0):
+            raise RuntimeError("invalid argument")
+        rec_mod.native_recorder = no_native
+
+    def tearDown(self):
+        rec_mod.native_recorder = self._native
+        super().tearDown()
+
+    def test_native_format_is_tried_first(self):
+        class NativeRec:
+            samplerate = 44100
+            channelmap = [0, 1]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def record(self, numframes):
+                return np.full((numframes, 2), 0.25, dtype=np.float32)
+
+        rec_mod.native_recorder = lambda dev, buffer_hns=0: NativeRec()
+        backend = rec_mod.SoundcardBackend.__new__(rec_mod.SoundcardBackend)
+        backend.device = lambda name: type("D", (), {"name": "USB PnP"})()
+        src = backend.open("mic", 16000)
+        self.assertIn("родной формат", src.config)
+        block = src.read(1600)
+        self.assertEqual(len(block), 1600)
+        self.assertAlmostEqual(float(block.mean()), 0.25, places=4)
     def test_resample_non_integer_ratio(self):
         x = np.sin(np.linspace(0, 20, 4410)).astype(np.float32)
         y = rec_mod.resample(x, 44100, 16000)
@@ -290,7 +324,7 @@ class FormatFallback(Base):
         src = backend.open("mic", 16000)
         self.assertEqual(attempts[:2], [(48000, 1), (48000, 2)])
         self.assertIn("48000", src.config)
-        self.assertEqual(len(src.tried), 1)
+        self.assertEqual(len(src.tried), 3)   # два варианта родного формата + 48 кГц моно
         block = src.read(4000)
         self.assertEqual(len(block), 4000)
         self.assertAlmostEqual(float(block.mean()), 0.5, places=4)
@@ -308,6 +342,7 @@ class FormatFallback(Base):
             backend.open("mic", 16000)
         # одна причина для всех форматов — показываем её один раз
         self.assertEqual(str(ctx.exception), "Сломанный: RuntimeError: invalid argument")
+        # родной формат и форматы с конвертацией дали одну и ту же ошибку
 
     def test_backend_lists_different_failures(self):
         class PickyDev:

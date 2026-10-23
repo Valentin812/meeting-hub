@@ -44,6 +44,14 @@ def main():
             results[label] = f"ok {data.shape}"
         except Exception:
             results[label] = traceback.format_exc().strip().splitlines()[-3:]
+    for kind in ("mic", "system"):
+        try:
+            src = recorder.SoundcardBackend().open(kind, 16000)
+            block = src.read(4000)
+            src.close()
+            results[f"backend {kind}"] = f"ok {src.config} len={len(block)}"
+        except Exception as e:
+            results[f"backend {kind}"] = str(e)[:200]
     note("raw-soundcard", results)
 
     # Полный цикл как в приложении: самотест и запись, во время записи играет тон.

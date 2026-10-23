@@ -56,9 +56,21 @@ def check_devices(prefix):
     except Exception:
         loop = None
         out(f"{prefix}динамики/loopback: ОШИБКА\n      " + short_tb())
+    sys.path.insert(0, str(HERE))
+    import recorder
     for label, dev in (("микрофон", mic), ("звук компьютера", loop)):
         if dev is None:
             continue
+        for buf in (2_000_000, 0):
+            try:
+                import numpy as np
+                r = recorder.native_recorder(dev, buf)
+                with r:
+                    data = np.asarray(r.record(numframes=r.samplerate // 4))
+                out(f"{prefix}  {label} РОДНОЙ ФОРМАТ ({r.samplerate} Гц, каналов {len(r.channelmap)}, "
+                    f"буфер {buf // 10000} мс): OK  форма {data.shape}, пик {float(np.abs(data).max()):.3f}")
+            except Exception:
+                out(f"{prefix}  {label} РОДНОЙ ФОРМАТ (буфер {buf // 10000} мс): ОШИБКА\n      " + short_tb())
         for rate, channels, blocksize in ((48000, 1, None), (48000, 2, None), (44100, 1, None),
                                           (16000, 1, None), (48000, 1, 4800), (48000, None, None)):
             out(f"{prefix}  {label} {rate} Гц, каналов {channels}, блок {blocksize}: "

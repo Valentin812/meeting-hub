@@ -85,6 +85,21 @@ class SoundcardBackend:
     def open(self, name, rate):
         dev = self.device(name)
         errors = []
+        # 1) Родной формат устройства без преобразований Windows: его WASAPI в общем режиме
+        #    принимает всегда. Нужен для Windows 10, где запрос «48 кГц моно» с автоконвертацией
+        #    у некоторых USB-устройств отклоняется с «invalid argument».
+        for buffer_hns in (2_000_000, 0):
+            try:
+                rec = native_recorder(dev, buffer_hns)
+                rec.__enter__()
+            except Exception as e:
+                errors.append(f"родной формат, буфер {buffer_hns // 10000} мс: {describe_error(e)}")
+                continue
+            src = _SoundcardSource(rec, getattr(dev, "name", name), rec.samplerate, rate)
+            src.config = f"родной формат устройства: {rec.samplerate} Гц, каналов {len(rec.channelmap)}"
+            src.tried = errors
+            return src
+        # 2) Запасной путь — форматы с автоконвертацией внутри Windows (так работала 1.2.0).
         for dev_rate, channels, blocksize in self.CONFIGS:
             try:
                 rec = dev.recorder(samplerate=dev_rate, channels=channels, blocksize=blocksize)
@@ -100,6 +115,33 @@ class SoundcardBackend:
         if len(reasons) == 1:   # одна и та же причина для всех форматов — формат ни при чём
             raise RecorderError(f"{getattr(dev, 'name', name)}: {reasons.pop()}")
         raise RecorderError(f"{getattr(dev, 'name', name)}: ни один формат не подошёл — " + " | ".join(errors[:3]))
+
+
+def native_recorder(dev, buffer_hns=2_000_000):
+    """Рекордер soundcard, инициализированный родным форматом устройства (GetMixFormat без изменений)."""
+    from soundcard import mediafoundation as mf
+
+    class NativeRecorder(mf._Recorder):
+        def __init__(self, ptr, isloopback):
+            self._ptr = ptr
+            pp = mf._ffi.new("WAVEFORMATEXTENSIBLE**")
+            hr = ptr[0][0].lpVtbl.GetMixFormat(ptr[0], pp)
+            mf._com.check_error(hr)
+            try:
+                fmt = pp[0][0].Format
+                if fmt.wBitsPerSample != 32:
+                    raise RecorderError(f"родной формат {fmt.wBitsPerSample} бит не поддерживается")
+                self.samplerate = int(fmt.nSamplesPerSec)
+                self.channelmap = list(range(int(fmt.nChannels)))
+                flags = 0x00020000 if isloopback else 0   # AUDCLNT_STREAMFLAGS_LOOPBACK
+                hr = ptr[0][0].lpVtbl.Initialize(ptr[0], mf._ole32.AUDCLNT_SHAREMODE_SHARED, flags,
+                                                 buffer_hns, 0, pp[0], mf._ffi.NULL)
+                mf._com.check_error(hr)
+            finally:
+                mf._ole32.CoTaskMemFree(pp[0])
+            self._idle_start_time = None
+
+    return NativeRecorder(dev._audio_client(), getattr(dev, "isloopback", False))
 
 
 class _SoundcardSource:
