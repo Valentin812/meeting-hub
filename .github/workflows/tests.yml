@@ -73,6 +73,7 @@ jobs:
           Write-Output "::notice title=audio_check::OK=$ok ОШИБКА=$err"
           if ($ok -lt 1) { throw "audio_check.py did not open any device" }
       - name: PyAudioWPatch probe
+        timeout-minutes: 3
         run: |
           python -m pip install PyAudioWPatch
           python tests/pa_probe.py

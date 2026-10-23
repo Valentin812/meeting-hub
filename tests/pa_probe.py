@@ -21,10 +21,17 @@ try:
     if loop:
         s = p.open(format=pa.paFloat32, channels=loop["maxInputChannels"], rate=int(loop["defaultSampleRate"]),
                    input=True, input_device_index=loop["index"], frames_per_buffer=1024)
-        data = s.read(1024, exception_on_overflow=False)
-        s.close()
-        res["loopback_read"] = len(data)
+        import threading, math, struct
+        out = p.open(format=pa.paFloat32, channels=1, rate=48000, output=True)
+        tone = struct.pack("<4800f", *[0.3 * math.sin(2 * math.pi * 440 * i / 48000) for i in range(4800)])
+        stop = threading.Event()
+        threading.Thread(target=lambda: [out.write(tone) for _ in iter(lambda: stop.is_set(), True)], daemon=True).start()
+        got = {}
+        th = threading.Thread(target=lambda: got.setdefault("n", len(s.read(1024, exception_on_overflow=False))), daemon=True)
+        th.start(); th.join(10); stop.set()
+        res["loopback_read"] = got.get("n", "timeout")
     note("pa", res)
-    p.terminate()
+    import os
+    os._exit(0)
 except Exception:
     note("pa-failed", traceback.format_exc())
