@@ -99,7 +99,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.4.0"
+APP_VERSION = "5.5.0"
 
 import support
 from support import app_dir, data_dir
@@ -389,6 +389,7 @@ class App:
         self.data = {"summary": [], "decisions": [], "tasks": [], "open_questions": [], "uncertain_fragments": []}
         self.analysis_cancel = threading.Event()
         self.analysis_running = False
+        self.analysis_source = None
         self.pending_transcript = None
         self.settings_path = here / "meeting_hub_settings.json"
         self.settings = self.load_settings()
@@ -429,6 +430,9 @@ class App:
         self.auto_transcribe = tk.BooleanVar(value=bool(self.settings.get("auto_transcribe", False)))
         ttk.Checkbutton(livebar, text="Расшифровывать записи", variable=self.auto_transcribe,
                         command=self.toggle_transcribe_setting).pack(side="left", padx=12)
+        self.auto_summary = tk.BooleanVar(value=bool(self.settings.get("auto_summary", False)))
+        ttk.Checkbutton(livebar, text="Сразу делать итоги", variable=self.auto_summary,
+                        command=self.toggle_summary_setting).pack(side="left")
         ttk.Button(livebar, text="Завершить встречу", command=lambda: self.user_action("manual_end")).pack(side="right")
         ttk.Button(livebar, text="Начать встречу", command=lambda: self.user_action("manual_start")).pack(side="right", padx=6)
         self.rec_btn = ttk.Button(livebar, text="● Записать", command=self.toggle_recording_button)
@@ -440,7 +444,7 @@ class App:
         self.substatus.pack(fill="x")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        nb = ttk.Notebook(root); nb.pack(fill="both", expand=True, padx=10, pady=4)
+        nb = self.nb = ttk.Notebook(root); nb.pack(fill="both", expand=True, padx=10, pady=4)
         self.tab_trans = ttk.Frame(nb, padding=8); self.tab_summary = ttk.Frame(nb, padding=8)
         self.tab_dec = ttk.Frame(nb, padding=8); self.tab_tasks = ttk.Frame(nb, padding=8)
         self.tab_questions = ttk.Frame(nb, padding=8); self.tab_training = ttk.Frame(nb, padding=8)
@@ -689,6 +693,72 @@ class App:
         self.refresh_records()
         self.refresh_status()
 
+    def toggle_summary_setting(self):
+        self.settings["auto_summary"] = bool(self.auto_summary.get())
+        self.save_settings()
+        self.last_event_text = ("После расшифровки итоги встречи будут готовиться автоматически (нужна Ollama)."
+                                if self.auto_summary.get() else "Автоматические итоги выключены.")
+        self.refresh_status()
+
+    @staticmethod
+    def summary_path(wav):
+        wav = Path(wav)
+        return wav.with_name(wav.stem + ".summary.json")
+
+    def summarize_selected(self):
+        sel = self.records_tree.selection()
+        if not sel:
+            messagebox.showinfo("Записи", "Сначала выберите запись.")
+            return
+        if not tr_mod.has_transcript(sel[0]):
+            messagebox.showinfo("Итоги встречи", "Для этой записи ещё нет расшифровки. Нажмите «Расшифровать», "
+                                "после неё можно получить итоги.")
+            return
+        self.open_summary_for(sel[0], rerun=False)
+
+    def open_summary_for(self, wav, rerun=False, automatic=False):
+        """Показать итоги записи; если их нет (или rerun) — запустить анализ расшифровки."""
+        wav = Path(wav)
+        txt = tr_mod.output_paths(wav)[0]
+        try:
+            text = txt.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError as e:
+            messagebox.showerror("Итоги встречи", f"Не удалось прочитать расшифровку: {e}")
+            return
+        meta = {}
+        try:
+            meta = json.loads(wav.with_suffix(".json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        self.transcript_path = str(txt)
+        self.trans.delete("1.0", "end")
+        self.trans.insert("1.0", text)
+        self.name.delete(0, "end")
+        self.name.insert(0, meta.get("meeting") or meta.get("window") or wav.stem)
+        stem = wav.stem
+        if len(stem) >= 8 and stem[:8].isdigit():
+            self.date.delete(0, "end")
+            self.date.insert(0, f"{stem[0:4]}-{stem[4:6]}-{stem[6:8]}")
+        sp = self.summary_path(wav)
+        if sp.exists() and not rerun:
+            try:
+                self.show_result(json.loads(sp.read_text(encoding="utf-8")))
+                self.nb.select(self.tab_summary)
+                return
+            except (OSError, ValueError):
+                pass
+        if self.auto_pause.get() and self.detector.blocks_analysis and not automatic:
+            messagebox.showwarning("Итоги встречи", "Сейчас идёт встреча — итоги подготовятся после неё.")
+        self.analysis_source = wav
+        if self.auto_pause.get() and self.detector.blocks_analysis:
+            self.pending_transcript = (text, self.model.get().strip() or DEFAULT_MODEL)
+            self.last_event_text = "Итоги встречи подготовятся после её окончания."
+            self.refresh_status()
+        else:
+            self.start_analysis(text, self.model.get().strip() or DEFAULT_MODEL, automatic=automatic)
+        if not automatic:
+            self.nb.select(self.tab_summary)
+
     def transcribe_selected(self):
         sel = self.records_tree.selection()
         if not sel:
@@ -723,6 +793,8 @@ class App:
         if st["state"] == "done":
             self._journal_note("Расшифровка готова", name, "auto", file=name)
             self.last_event_text = f"Расшифровка готова: {Path(st['result']).name}"
+            if self.auto_summary.get() and not self.analysis_running and not self.pending_transcript:
+                self.open_summary_for(key, rerun=False, automatic=True)
         elif st["state"] == "error":
             self._journal_note("Ошибка расшифровки", f"{name}: {st['error']}", "auto", file=name)
             self.last_event_text = f"Ошибка расшифровки: {st['error']}"
@@ -745,7 +817,9 @@ class App:
                 return "ошибка: " + st["error"][:60]
             if s == "cancelled" and not tr_mod.has_transcript(wav):
                 return "отменена"
-        return "готова" if tr_mod.has_transcript(wav) else ""
+        if tr_mod.has_transcript(wav):
+            return "готова, есть итоги" if self.summary_path(wav).exists() else "готова"
+        return ""
 
     def toggle_record_setting(self):
         self.settings["record_meetings"] = bool(self.record_meetings.get())
@@ -922,6 +996,7 @@ class App:
         ttk.Button(bar, text="Воспроизвести", command=self.play_selected_record).pack(side="left")
         ttk.Button(bar, text="Расшифровать", command=self.transcribe_selected).pack(side="left", padx=5)
         ttk.Button(bar, text="Открыть расшифровку", command=self.open_transcript).pack(side="left")
+        ttk.Button(bar, text="Итоги встречи", command=self.summarize_selected).pack(side="left", padx=5)
         ttk.Button(bar, text="Отменить", command=self.cancel_transcription).pack(side="left", padx=5)
         ttk.Button(bar, text="Открыть папку", command=self.open_records_folder).pack(side="left", padx=5)
         ttk.Button(bar, text="Обновить", command=self.refresh_records).pack(side="left", padx=5)
@@ -1398,6 +1473,7 @@ class App:
             messagebox.showinfo("Нет текста", "Сначала открой TXT-расшифровку.")
             return
         self.pending_transcript = None
+        self.analysis_source = None
         self.start_analysis(transcript, model, automatic=False)
 
     def start_analysis(self, transcript, model, automatic=False):
@@ -1435,6 +1511,14 @@ class App:
             self.root.after(500, self.resume_after_meeting)
 
     def show_result(self, result):
+        src = getattr(self, "analysis_source", None)
+        if src is not None:
+            self.analysis_source = None
+            try:
+                self.summary_path(src).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as e:
+                self.log.warning("summary not saved: %s", e)
+            self.refresh_records()
         self.data = result
         self.summary.delete("1.0", "end")
         self.summary.insert("1.0", "\n".join("• " + str(x) for x in result.get("summary", [])) or "Резюме не сформировано.")
