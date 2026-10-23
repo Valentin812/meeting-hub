@@ -2,7 +2,7 @@
 setlocal
 title Meeting Hub Setup
 cd /d "%~dp0"
-echo Installing recording packages (numpy, soundcard)...
+echo Installing recording packages (numpy, PyAudioWPatch, soundcard)...
 python -m pip install --upgrade -r requirements.txt
 if errorlevel 1 (
   echo Could not install recording packages. Meeting detection still works; recording will be unavailable.
