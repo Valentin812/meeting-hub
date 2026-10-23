@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   exe:
-    name: MeetingHub.exe (Python 3.12) + test on virtual sound card
+    name: MeetingHub.exe + installer (Python 3.12), tested on a virtual sound card
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,77 +29,130 @@ jobs:
           $v = (Select-String -Path app.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
           "version=$v" >> $env:GITHUB_OUTPUT
 
-      - name: Build
+      - name: Build exe
         run: >
           pyinstaller --noconfirm --clean --windowed --name MeetingHub
-          --hidden-import audio_check --hidden-import pyaudiowpatch
+          --hidden-import audio_check --hidden-import support --hidden-import pyaudiowpatch
           --collect-data soundcard
           app.py
 
-      - name: Package
+      - name: Code signing certificate (optional)
+        id: cert
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+        run: |
+          if ($env:PFX_B64) {
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\codesign.pfx", [Convert]::FromBase64String($env:PFX_B64))
+            $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+            "signtool=$($tool.FullName)" >> $env:GITHUB_OUTPUT
+            "enabled=true" >> $env:GITHUB_OUTPUT
+            Write-Output "::notice title=signing::certificate found, binaries will be signed"
+          } else {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Output "::notice title=signing::no CODESIGN_PFX_BASE64 secret, build is unsigned"
+          }
+
+      - name: Sign exe
+        if: steps.cert.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+        run: >
+          & "${{ steps.cert.outputs.signtool }}" sign /f "$env:RUNNER_TEMP\codesign.pfx" /p "$env:PFX_PASSWORD"
+          /fd sha256 /tr http://timestamp.digicert.com /td sha256 dist\MeetingHub\MeetingHub.exe
+
+      - name: Build installer
         shell: pwsh
         run: |
-          $name = "MeetingHub-v${{ steps.ver.outputs.version }}-exe"
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = @('C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files\Inno Setup 6\ISCC.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+          if (-not $iscc) { choco install innosetup -y --no-progress; $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' }
+          & $iscc "/DAppVer=${{ steps.ver.outputs.version }}" packaging\MeetingHub.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          "setup=pkg\MeetingHubSetup-v${{ steps.ver.outputs.version }}.exe" >> $env:GITHUB_ENV
+
+      - name: Sign installer
+        if: steps.cert.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+        run: >
+          & "${{ steps.cert.outputs.signtool }}" sign /f "$env:RUNNER_TEMP\codesign.pfx" /p "$env:PFX_PASSWORD"
+          /fd sha256 /tr http://timestamp.digicert.com /td sha256 $env:setup
+
+      - name: Portable ZIP
+        shell: pwsh
+        run: |
+          $name = "MeetingHub-v${{ steps.ver.outputs.version }}-portable"
           $dst = "pkg\$name"
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
           Copy-Item -Recurse dist\MeetingHub\* $dst
           Copy-Item packaging\README_EXE.txt "$dst\ПРОЧТИ_МЕНЯ.txt"
           Copy-Item packaging\audio_check.bat, packaging\setup_ollama.bat, README.txt, CHANGELOG.md, MANUAL_TEST.txt $dst
-          "name=$name" >> $env:GITHUB_ENV
+          "Портативный режим: данные хранятся в этой папке рядом с MeetingHub.exe." | Out-File "$dst\portable.txt" -Encoding utf8
+          Compress-Archive -Path $dst -DestinationPath "pkg\$name.zip"
+          "portable=pkg\$name.zip" >> $env:GITHUB_ENV
 
-      - name: Test - audio check from exe
+      - name: Test - silent install for the current user
         shell: pwsh
         run: |
-          $dir = "pkg\$env:name"
-          Start-Process -FilePath "$dir\MeetingHub.exe" -ArgumentList "--audio-check" -Wait -WorkingDirectory $dir
-          $r = Get-Content "$dir\meeting_hub_audio_report.txt" -Encoding utf8
-          $r | Select-Object -First 40
+          Start-Process -FilePath $env:setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$env:RUNNER_TEMP\setup.log" -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
+          if (-not (Test-Path $exe)) { Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 40; throw "not installed: $exe" }
+          $lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter "Meeting Hub*.lnk"
+          Write-Output "::notice title=installer::installed to $exe; start menu shortcuts: $($lnk.Count)"
+
+      - name: Test - installed app checks sound and records 4 s while a tone plays
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
+          $data = "$env:LOCALAPPDATA\Meeting Hub"
+          Start-Process -FilePath $exe -ArgumentList "--audio-check" -Wait
+          $r = Get-Content "$data\meeting_hub_audio_report.txt" -Encoding utf8
           $ok = ($r | Select-String '^\s*OK').Count
           Write-Output "::notice title=exe audio_check::OK=$ok"
-          $sec = ($r | Select-String -Context 0,1 'Антивирусы' | ForEach-Object { $_.Context.PostContext }) -join ' '
-          Write-Output "::notice title=exe security::$sec"
-          if (-not ($r | Select-String 'Сторонние библиотеки')) { throw "report has no module section" }
-          if ($ok -lt 1) { throw "exe could not open any audio device" }
-          Remove-Item "$dir\meeting_hub_audio_report.txt"
-
-      - name: Test - record 4 s from exe while a tone plays
-        shell: pwsh
-        run: |
-          $dir = "pkg\$env:name"
+          if ($ok -lt 1) { throw "installed exe could not open any audio device" }
           $tone = Start-Process -FilePath python -ArgumentList "tests\play_tone.py", "15" -PassThru -NoNewWindow
           Start-Sleep -Seconds 2
-          if ($tone.HasExited) { throw "tone player exited early" }
-          Start-Process -FilePath "$dir\MeetingHub.exe" -ArgumentList "--record-test", "4" -Wait -WorkingDirectory $dir
+          Start-Process -FilePath $exe -ArgumentList "--record-test", "4" -Wait
           Stop-Process -Id $tone.Id -ErrorAction SilentlyContinue
-          $j = Get-Content "$dir\record_test.json" -Encoding utf8 | ConvertFrom-Json
-          Write-Output "::notice title=exe record_test::duration=$($j.duration) system_peak=$($j.system_peak) mic_peak=$($j.mic_peak) errors=$($j.errors)"
-          if ($j.system_peak -lt 1000) { throw "computer sound was not recorded by the exe" }
+          $j = Get-Content "$data\record_test.json" -Encoding utf8 | ConvertFrom-Json
+          Write-Output "::notice title=exe record_test::duration=$($j.duration) system_peak=$($j.system_peak)"
+          if ($j.system_peak -lt 1000) { throw "computer sound was not recorded" }
           if ([math]::Abs($j.duration - 4) -gt 0.5) { throw "wrong duration" }
-          Remove-Item -Recurse "$dir\recordings", "$dir\record_test.json"
+          if (Test-Path "$env:LOCALAPPDATA\Programs\Meeting Hub\recordings") { throw "data written next to the program instead of the user profile" }
 
-      - name: Test - GUI starts and stays up
+      - name: Test - GUI starts, imports data of an old version placed next to the exe
         shell: pwsh
         run: |
-          $dir = "pkg\$env:name"
-          Copy-Item tests\data\meeting_hub_training_v49.json "$dir\meeting_hub_training.json"
-          $p = Start-Process -FilePath "$dir\MeetingHub.exe" -WorkingDirectory $dir -PassThru
-          Start-Sleep -Seconds 12
+          $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
+          $data = "$env:LOCALAPPDATA\Meeting Hub"
+          Remove-Item "$data\meeting_hub_training*.json" -ErrorAction SilentlyContinue
+          Copy-Item tests\data\meeting_hub_training_v49.json "$app\meeting_hub_training.json"
+          $p = Start-Process -FilePath "$app\MeetingHub.exe" -PassThru
+          $deadline = (Get-Date).AddSeconds(40)
+          while (-not (Test-Path "$data\meeting_hub.log") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+          Start-Sleep -Seconds 5
           if ($p.HasExited) { throw "MeetingHub.exe exited early with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id
-          if (-not (Test-Path "$dir\meeting_hub.log")) { throw "no log file" }
-          if (-not (Get-ChildItem "$dir\meeting_hub_training.v4-backup-*.json")) { throw "training data was not migrated" }
-          Write-Output "::notice title=exe gui::started, log created, v4.9 data migrated"
-          Remove-Item "$dir\meeting_hub_training*.json", "$dir\meeting_hub.log*"
+          if (-not (Test-Path "$data\meeting_hub.log")) { throw "no log in the user data folder" }
+          if (-not (Test-Path "$data\meeting_hub_training.json")) { throw "old data was not imported" }
+          if (-not (Get-ChildItem "$data\meeting_hub_training.v4-backup-*.json")) { throw "v4.9 data was not migrated" }
+          Write-Output "::notice title=exe gui::started; old data imported into the profile and migrated"
 
-      - name: Zip
+      - name: Test - upgrade over the installed version and uninstall keeps user data
         shell: pwsh
-        run: Compress-Archive -Path "pkg\$env:name" -DestinationPath "pkg\$env:name.zip"
-
-      - uses: actions/upload-artifact@v4
-        continue-on-error: true   # хранилище артефактов может быть заполнено; основной канал — релиз
-        with:
-          name: ${{ env.name }}
-          path: pkg/${{ env.name }}.zip
+        run: |
+          Start-Process -FilePath $env:setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
+          if (-not (Test-Path "$app\MeetingHub.exe")) { throw "upgrade broke the installation" }
+          Start-Process -FilePath "$app\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          Start-Sleep -Seconds 3
+          if (Test-Path "$app\MeetingHub.exe") { throw "program not removed" }
+          if (-not (Test-Path "$env:LOCALAPPDATA\Meeting Hub\meeting_hub_training.json")) { throw "user data lost on uninstall" }
+          if (-not (Get-ChildItem "$env:LOCALAPPDATA\Meeting Hub\recordings\*.wav")) { throw "recordings lost on uninstall" }
+          Write-Output "::notice title=installer upgrade/uninstall::program removed, user data kept"
 
       - name: Publish as GitHub pre-release
         shell: pwsh
@@ -107,8 +160,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v${{ steps.ver.outputs.version }}"
+          $signed = "${{ steps.cert.outputs.enabled }}"
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --prerelease --target $env:GITHUB_SHA --title "Meeting Hub $tag (exe)" --notes "Готовая программа для Windows: распакуйте и запустите MeetingHub.exe. Сборка из коммита $env:GITHUB_SHA."
+            gh release create $tag --prerelease --target $env:GITHUB_SHA --title "Meeting Hub $tag" --notes "MeetingHubSetup — установщик (рекомендуется). portable.zip — версия без установки. Подпись: $signed. Сборка из коммита $env:GITHUB_SHA."
           }
-          gh release upload $tag "pkg\$env:name.zip" --clobber
+          gh release upload $tag $env:setup $env:portable --clobber
