@@ -42,6 +42,13 @@ def check_real_audio():
             detail = f"mic={sc.default_microphone()!r} speaker={sc.default_speaker()!r}"
         except Exception as e:
             detail = f"нет устройств: {e}"
+    try:
+        import soundcard, importlib.metadata as md
+        src = Path(soundcard.__file__).with_name("mediafoundation.py").read_text(encoding="utf-8")
+        detail += (f"; soundcard {md.version('soundcard')}, numpy {md.version('numpy')}"
+                   f"; fromstring={'fromstring' in src} CoInitialize={'CoInitialize' in src}")
+    except Exception as e:
+        detail += f"; версия: {e}"
     print(f"::notice title=audio::soundcard available={ok}; {detail}")
     assert ok, why
 
