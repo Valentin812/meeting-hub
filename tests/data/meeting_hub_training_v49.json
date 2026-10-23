@@ -1,0 +1,289 @@
+{
+  "events": [
+    {
+      "id": "1792403921115-0",
+      "time": "2026-10-19 14:58:41",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792403964214-1",
+      "time": "2026-10-19 14:59:24",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Звук есть, но он не связан с распознанным приложением для встреч.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792403991802-2",
+      "time": "2026-10-19 14:59:51",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404028004-3",
+      "time": "2026-10-19 15:00:28",
+      "source": "Ручное управление",
+      "event": "Встреча подтверждена",
+      "detail": "Встреча подтверждена пользователем вручную",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404068657-4",
+      "time": "2026-10-19 15:01:08",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368776657724524'}",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404068658-5",
+      "time": "2026-10-19 15:01:08",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_microphone\\\\nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368776657724524'}",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404090198-6",
+      "time": "2026-10-19 15:01:30",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Звук есть, но он не связан с распознанным приложением для встреч.",
+      "feedback": "Не встреча"
+    },
+    {
+      "id": "1792404096343-7",
+      "time": "2026-10-19 15:01:36",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404099413-8",
+      "time": "2026-10-19 15:01:39",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Звук есть, но он не связан с распознанным приложением для встреч.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404105594-9",
+      "time": "2026-10-19 15:01:45",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не встреча"
+    },
+    {
+      "id": "1792404108671-10",
+      "time": "2026-10-19 15:01:48",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Звук есть, но он не связан с распознанным приложением для встреч.",
+      "feedback": "Не встреча"
+    },
+    {
+      "id": "1792404127108-11",
+      "time": "2026-10-19 15:02:07",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404133707-12",
+      "time": "2026-10-19 15:02:13",
+      "source": "Ручное управление",
+      "event": "Встреча подтверждена",
+      "detail": "Встреча подтверждена пользователем вручную",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404154831-13",
+      "time": "2026-10-19 15:02:34",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368777524327288'}",
+      "feedback": "Встреча"
+    },
+    {
+      "id": "1792404154835-14",
+      "time": "2026-10-19 15:02:34",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_microphone\\\\nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368777524327288'}",
+      "feedback": "Встреча"
+    },
+    {
+      "id": "1792404189579-15",
+      "time": "2026-10-19 15:03:09",
+      "source": "Ручное управление",
+      "event": "Встреча подтверждена",
+      "detail": "Встреча подтверждена пользователем вручную",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404210146-16",
+      "time": "2026-10-19 15:03:30",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368778090483171'}",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792404210147-17",
+      "time": "2026-10-19 15:03:30",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_microphone\\\\nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368778090483171'}",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792406254755-18",
+      "time": "2026-10-19 15:37:34",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792406262079-19",
+      "time": "2026-10-19 15:37:42",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792406326836-20",
+      "time": "2026-10-19 15:38:46",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону начался",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368799249954299'}",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792406355783-21",
+      "time": "2026-10-19 15:39:15",
+      "source": "Ручное управление",
+      "event": "Встреча подтверждена",
+      "detail": "Встреча подтверждена пользователем вручную",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792407217070-22",
+      "time": "2026-10-19 15:53:37",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "feedback": "Не размечено"
+    },
+    {
+      "id": "1792407250954-23",
+      "time": "2026-10-19 15:54:10",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону начался",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368808498723872'}",
+      "feedback": "Встреча"
+    },
+    {
+      "id": "1792407305123-24",
+      "time": "2026-10-19 15:55:05",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368809048362167'}",
+      "feedback": "Встреча"
+    },
+    {
+      "id": "1792407317394-25",
+      "time": "2026-10-19 15:55:17",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону начался",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368809147126887'}",
+      "feedback": "Встреча"
+    },
+    {
+      "id": "1792407348100-26",
+      "time": "2026-10-19 15:55:48",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368809466969168'}",
+      "feedback": "Встреча"
+    }
+  ],
+  "feedback": [
+    {
+      "time": "2026-10-19T15:01:31",
+      "event_id": "1792404090198-6",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Звук есть, но он не связан с распознанным приложением для встреч.",
+      "label": "not_meeting"
+    },
+    {
+      "time": "2026-10-19T15:01:47",
+      "event_id": "1792404105594-9",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Приложение встречи/браузер открыто; жду подтверждения звука или речи.",
+      "label": "not_meeting"
+    },
+    {
+      "time": "2026-10-19T15:01:50",
+      "event_id": "1792404108671-10",
+      "source": "Детектор Windows",
+      "event": "Встреча не подтверждена",
+      "detail": "Звук есть, но он не связан с распознанным приложением для встреч.",
+      "label": "not_meeting"
+    },
+    {
+      "time": "2026-10-19T15:02:41",
+      "event_id": "1792404154835-14",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_microphone\\\\nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368777524327288'}",
+      "label": "meeting"
+    },
+    {
+      "time": "2026-10-19T15:55:26",
+      "event_id": "1792407250954-23",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону начался",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368808498723872'}",
+      "label": "meeting"
+    },
+    {
+      "time": "2026-10-19T15:55:28",
+      "event_id": "1792407317394-25",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону начался",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368809147126887'}",
+      "label": "meeting"
+    },
+    {
+      "time": "2026-10-19T15:55:32",
+      "event_id": "1792407305123-24",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368809048362167'}",
+      "label": "meeting"
+    },
+    {
+      "time": "2026-10-19T15:55:50",
+      "event_id": "1792407348100-26",
+      "source": "Google Chrome",
+      "event": "Доступ к микрофону завершился",
+      "detail": "{'key': 'hkcu_nonpackaged\\\\c:#program files#google#chrome#application#chrome.exe', 'timestamp': '134368809466969168'}",
+      "label": "meeting"
+    }
+  ],
+  "app_rules": {
+    "chrome.exe": "always"
+  }
+}

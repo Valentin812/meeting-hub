@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**", "chore/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  logic:
+    name: logic (Linux, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Syntax
+        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+  windows:
+    name: windows smoke (Python ${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Windows API and UI smoke test
+        run: python tests/smoke_windows.py
