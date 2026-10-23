@@ -141,6 +141,7 @@ if __name__ == "__main__":
         print("Пропуск: тест только для Windows")
         sys.exit(0)
     import traceback
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     for check in (check_signals, check_real_audio, check_ui):
         try:
             check()
