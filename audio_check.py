@@ -100,6 +100,59 @@ def compat():
         out("  не включён")
 
 
+SECURITY = {
+    "avp.exe": "Kaspersky", "avpui.exe": "Kaspersky", "kavfs.exe": "Kaspersky", "klnagent.exe": "Kaspersky (агент администрирования)",
+    "dwservice.exe": "Dr.Web", "spideragent.exe": "Dr.Web", "dwengine.exe": "Dr.Web",
+    "ekrn.exe": "ESET", "egui.exe": "ESET", "msmpeng.exe": "Microsoft Defender",
+    "avastsvc.exe": "Avast", "avgsvc.exe": "AVG", "mcshield.exe": "McAfee", "ccsvchst.exe": "Norton/Symantec",
+    "sophoshealth.exe": "Sophos", "bdagent.exe": "Bitdefender", "psanhost.exe": "Panda",
+    "iwdmagent.exe": "InfoWatch (DLP)", "iwagent.exe": "InfoWatch (DLP)", "nscserver.exe": "SearchInform (DLP)",
+    "searchinform": "SearchInform (DLP)", "staffcop": "StaffCop (контроль сотрудников)", "falconsensor": "CrowdStrike",
+    "csfalconservice.exe": "CrowdStrike", "sentinelagent.exe": "SentinelOne", "cyserver.exe": "Cortex XDR",
+}
+
+
+def security_software():
+    """Антивирусы и системы контроля, которые умеют блокировать доступ к микрофону."""
+    if os.name != "nt":
+        return
+    import subprocess
+    res = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True,
+                         encoding="cp866", errors="replace", timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    names = {line.split('","')[0].strip('"').lower() for line in res.stdout.splitlines() if line.strip()}
+    found = sorted({vendor for name in names for key, vendor in SECURITY.items() if key in name})
+    out("  " + (", ".join(found) if found else "известные антивирусы и DLP не найдены"))
+
+
+def foreign_modules():
+    """Сторонние библиотеки, загруженные в процесс программы (антивирус и DLP так перехватывают звук)."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    psapi = ctypes.WinDLL("psapi")
+    kernel32 = ctypes.WinDLL("kernel32")
+    proc = kernel32.GetCurrentProcess()
+    mods = (wintypes.HMODULE * 2048)()
+    need = wintypes.DWORD()
+    psapi.EnumProcessModules(proc, mods, ctypes.sizeof(mods), ctypes.byref(need))
+    windir = os.environ.get("WINDIR", r"C:\Windows").lower()
+    own = [str(HERE).lower(), str(Path(sys.executable).parent).lower(), str(Path(sys.base_prefix)).lower()]
+    shown = 0
+    for i in range(min(need.value // ctypes.sizeof(wintypes.HMODULE), 2048)):
+        buf = ctypes.create_unicode_buffer(1024)
+        psapi.GetModuleFileNameExW(proc, mods[i], buf, 1024)
+        path = buf.value
+        low = path.lower()
+        if not path or low.startswith(windir) or any(low.startswith(o) for o in own) or "site-packages" in low:
+            continue
+        out(f"  {path}")
+        shown += 1
+    if not shown:
+        out("  сторонних библиотек нет")
+
+
 def portaudio_all():
     """Пробуем открыть КАЖДОЕ устройство записи и loopback через PortAudio."""
     import numpy as np
@@ -199,6 +252,18 @@ def main():
         portaudio_all()
     except Exception:
         out("  PortAudio: ОШИБКА\n      " + short_tb())
+
+    out("\n--- Антивирусы и системы контроля ---")
+    try:
+        security_software()
+    except Exception:
+        out("  ОШИБКА: " + last_error())
+
+    out("\n--- Сторонние библиотеки в процессе программы ---")
+    try:
+        foreign_modules()
+    except Exception:
+        out("  ОШИБКА: " + last_error())
 
     out("\n--- soundcard: устройства по умолчанию ---")
     try:

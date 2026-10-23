@@ -98,7 +98,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.2.0"
+APP_VERSION = "5.2.1"
 
 
 def app_dir():
