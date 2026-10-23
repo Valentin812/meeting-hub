@@ -93,6 +93,7 @@ jobs:
         run: Compress-Archive -Path "pkg\$env:name" -DestinationPath "pkg\$env:name.zip"
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true   # хранилище артефактов может быть заполнено; основной канал — релиз
         with:
           name: ${{ env.name }}
           path: pkg/${{ env.name }}.zip
