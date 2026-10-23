@@ -269,6 +269,14 @@ def main():
     except Exception:
         out("  ОШИБКА: " + last_error())
 
+    try:
+        import recorder
+        hint = recorder.blocker_hint()
+        if hint:
+            out("\n  ВЫВОД: " + hint)
+    except Exception:
+        pass
+
     out("\n--- soundcard: устройства по умолчанию ---")
     try:
         soundcard_default()

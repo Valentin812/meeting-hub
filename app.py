@@ -98,7 +98,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.2.1"
+APP_VERSION = "5.2.2"
 
 
 def app_dir():
@@ -569,6 +569,10 @@ class App:
             err = info.get("error")
             if err and err not in self.rec_errors_seen:
                 self.rec_errors_seen.add(err)
+                hint = rec_mod.blocker_hint()
+                if hint and hint not in self.rec_errors_seen:
+                    self.rec_errors_seen.add(hint)
+                    self._journal_note("Запись заблокирована", hint)
                 self._journal_note("Ошибка записи", err)
                 self.last_event_text = "Проблема с записью: " + err
 
@@ -672,6 +676,10 @@ class App:
                     loud = "слышно" if info.get("peak", 0) > 0.02 else "тишина"
                     lines.append(f"  получено {info.get('seconds', 0):.1f} с звука, пик {info.get('peak', 0):.2f} — {loud}")
             text = "\n".join(lines)
+        if all(res.get(n, {}).get("error") for n in ("mic", "system")):
+            hint = rec_mod.blocker_hint()
+            if hint:
+                text += "\n\n" + hint
         self.log.info("recording self-test: %s", res)
         self._journal_note("Проверка записи", text.replace("\n", " "), "user")
         messagebox.showinfo("Проверка записи", text)

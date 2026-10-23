@@ -335,6 +335,26 @@ class AutoBackend:
                 close()
 
 
+KASPERSKY_HINT = ("Запись блокирует Kaspersky Endpoint Security (защита аудиопотока). Добавьте MeetingHub.exe "
+                  "в доверенные программы Kaspersky или попросите администратора разрешить ему доступ "
+                  "к микрофону и звуку. Подробности — в README.txt, раздел «Kaspersky».")
+
+
+def blocker_hint():
+    """Подсказка, если звук, вероятно, блокирует защитная программа, встроившаяся в наш процесс."""
+    if os.name != "nt":
+        return ""
+    import ctypes
+    try:
+        get = ctypes.windll.kernel32.GetModuleHandleW
+        get.restype = ctypes.c_void_p
+        if get("com_antivirus.dll"):
+            return KASPERSKY_HINT
+    except Exception:
+        pass
+    return ""
+
+
 def available():
     """(True, '') если запись возможна, иначе (False, причина)."""
     try:
