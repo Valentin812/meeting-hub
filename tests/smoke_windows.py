@@ -91,6 +91,39 @@ def check_com_threads():
         root.destroy()
 
 
+COM_ORDER_PROBE = r"""
+import sys, threading, tkinter as tk
+sys.path.insert(0, sys.argv[1])
+root = tk.Tk(); root.withdraw()
+import recorder
+recorder.SoundcardBackend()          # как в приложении: soundcard импортируется после Tk
+import soundcard as sc
+out = {}
+def probe(key, init):
+    token = recorder.SoundcardBackend.thread_enter() if init else None
+    try:
+        sc.all_microphones(include_loopback=True); out[key] = "ok"
+    except Exception as e:
+        out[key] = recorder.describe_error(e)
+    finally:
+        recorder.SoundcardBackend.thread_exit(token)
+for key, init in (("без COM", False), ("с COM", True)):
+    th = threading.Thread(target=probe, args=(key, init)); th.start(); th.join(10)
+print(repr(out))
+"""
+
+
+def check_com_order():
+    """Порядок как в приложении (Tk → soundcard) в отдельном процессе."""
+    import subprocess
+    res = subprocess.run([sys.executable, "-c", COM_ORDER_PROBE, str(ROOT)], capture_output=True,
+                         text=True, encoding="utf-8", errors="replace", timeout=60,
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    out = (res.stdout.strip().splitlines() or [""])[-1]
+    print(f"::notice title=com-order::rc={res.returncode} {out} {res.stderr.strip()[-300:]}")
+    assert "'с COM': 'ok'" in out, out
+
+
 def check_ui():
     # Работаем на копии, чтобы не трогать файл обучения в репозитории.
     work = Path(tempfile.mkdtemp())
@@ -187,7 +220,7 @@ if __name__ == "__main__":
         sys.exit(0)
     import traceback
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    for check in (check_signals, check_real_audio, check_com_threads, check_ui):
+    for check in (check_signals, check_com_order, check_real_audio, check_com_threads, check_ui):
         try:
             check()
         except Exception:
