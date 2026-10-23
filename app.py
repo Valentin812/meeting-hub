@@ -93,12 +93,13 @@ from tkinter import simpledialog
 
 import win_signals
 import recorder as rec_mod
+import transcriber as tr_mod
 from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, BROWSERS, MEETING_APPS,
                               IDLE, ASKING, COUNTDOWN, IN_MEETING, ENDING,
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.3.0"
+APP_VERSION = "5.4.0"
 
 import support
 from support import app_dir, data_dir
@@ -425,6 +426,9 @@ class App:
         self.record_meetings = tk.BooleanVar(value=bool(self.settings.get("record_meetings", True)))
         ttk.Checkbutton(livebar, text="Записывать встречи", variable=self.record_meetings,
                         command=self.toggle_record_setting).pack(side="left")
+        self.auto_transcribe = tk.BooleanVar(value=bool(self.settings.get("auto_transcribe", False)))
+        ttk.Checkbutton(livebar, text="Расшифровывать записи", variable=self.auto_transcribe,
+                        command=self.toggle_transcribe_setting).pack(side="left", padx=12)
         ttk.Button(livebar, text="Завершить встречу", command=lambda: self.user_action("manual_end")).pack(side="right")
         ttk.Button(livebar, text="Начать встречу", command=lambda: self.user_action("manual_start")).pack(side="right", padx=6)
         self.rec_btn = ttk.Button(livebar, text="● Записать", command=self.toggle_recording_button)
@@ -499,6 +503,12 @@ class App:
             self.log.exception("Ошибка цикла обнаружения")
             self.last_event_text = "Ошибка цикла обнаружения — подробности в meeting_hub.log"
         finally:
+            tq = getattr(self, "tq", None)
+            if tq is not None:
+                tq.set_paused(self.detector.blocks_analysis)
+                if tq.busy() and time.time() - getattr(self, "_tr_refresh", 0) > 2:
+                    self._tr_refresh = time.time()
+                    self.refresh_records()
             self.refresh_status()
             self.refresh_prompt()
             if self.root.winfo_exists():
@@ -580,6 +590,9 @@ class App:
             parts.append(f"● ЗАПИСЬ {sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}")
         elif self._saving_threads:
             parts.append("сохраняю запись…")
+        tq = getattr(self, "tq", None)
+        if tq is not None and tq.busy():
+            parts.append("расшифровка: пауза" if tq.paused.is_set() else "расшифровка идёт")
         if self.analysis_running:
             parts.append("ИИ: анализ идёт")
         elif self.pending_transcript:
@@ -624,6 +637,115 @@ class App:
             self.settings_path.write_text(json.dumps(self.settings, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError as e:
             self.log.warning("settings not saved: %s", e)
+
+    # ------------------------------------------------------------------
+    # Расшифровка записей
+    # ------------------------------------------------------------------
+    def transcribe_queue(self):
+        if getattr(self, "tq", None) is None:
+            size = self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL)
+            folder = self.data_dir / "models"
+
+            def factory():
+                return tr_mod.LocalWhisper(folder, size=size)
+
+            self.tq = tr_mod.TranscriptionQueue(
+                factory, language=self.settings.get("language", "ru"), log=self.log,
+                on_done=lambda key, st: self._ui_calls.put((self._transcribed, (key, st))))
+        return self.tq
+
+    def toggle_transcribe_setting(self):
+        on = bool(self.auto_transcribe.get())
+        if on:
+            ok, why = tr_mod.LocalWhisper.available()
+            if not ok:
+                messagebox.showerror("Расшифровка", why)
+                self.auto_transcribe.set(False)
+                on = False
+            elif not messagebox.askokcancel(
+                    "Расшифровка записей",
+                    "Записи будут расшифровываться на этом компьютере, звук никуда не отправляется.\n\n"
+                    "При первой расшифровке один раз скачается модель распознавания речи "
+                    f"(«{self.settings.get('whisper_model', tr_mod.DEFAULT_MODEL)}», до 0,5 ГБ) — нужен интернет.\n"
+                    "Во время встреч расшифровка ставится на паузу.", parent=self.root):
+                self.auto_transcribe.set(False)
+                on = False
+        self.settings["auto_transcribe"] = on
+        self.save_settings()
+        self.last_event_text = "Записи будут расшифровываться автоматически." if on else \
+            "Автоматическая расшифровка выключена. Кнопка «Расшифровать» на вкладке «Записи» работает."
+        self.refresh_status()
+
+    def transcribe_files(self, paths):
+        ok, why = tr_mod.LocalWhisper.available()
+        if not ok:
+            messagebox.showerror("Расшифровка", why)
+            return
+        q = self.transcribe_queue()
+        q.set_paused(self.detector.blocks_analysis)
+        added = [p for p in paths if q.add(p)]
+        if added:
+            self._journal_note("Расшифровка поставлена в очередь", f"Файлов: {len(added)}", "user")
+        self.refresh_records()
+        self.refresh_status()
+
+    def transcribe_selected(self):
+        sel = self.records_tree.selection()
+        if not sel:
+            messagebox.showinfo("Записи", "Сначала выберите запись.")
+            return
+        self.transcribe_files(list(sel))
+
+    def open_transcript(self):
+        sel = self.records_tree.selection()
+        if not sel:
+            messagebox.showinfo("Записи", "Сначала выберите запись.")
+            return
+        txt = tr_mod.output_paths(sel[0])[0]
+        if not txt.exists():
+            messagebox.showinfo("Записи", "Для этой записи расшифровки ещё нет. Нажмите «Расшифровать».")
+            return
+        try:
+            os.startfile(str(txt))  # type: ignore[attr-defined]
+        except (OSError, AttributeError) as e:
+            messagebox.showerror("Записи", f"Не удалось открыть файл: {e}")
+
+    def cancel_transcription(self):
+        if getattr(self, "tq", None) is not None:
+            self.tq.cancel()
+            for k, st in self.tq.status.items():
+                if st["state"] == "queued":
+                    st["state"] = "cancelled"
+        self.refresh_records()
+
+    def _transcribed(self, key, st):
+        name = Path(key).name
+        if st["state"] == "done":
+            self._journal_note("Расшифровка готова", name, "auto", file=name)
+            self.last_event_text = f"Расшифровка готова: {Path(st['result']).name}"
+        elif st["state"] == "error":
+            self._journal_note("Ошибка расшифровки", f"{name}: {st['error']}", "auto", file=name)
+            self.last_event_text = f"Ошибка расшифровки: {st['error']}"
+        self.refresh_records()
+        self.refresh_status()
+
+    def transcript_state_text(self, wav):
+        st = getattr(self, "tq", None) and self.tq.status.get(str(wav))
+        if st:
+            s = st["state"]
+            if s == "queued":
+                return "в очереди"
+            if s == "loading":
+                return "загружаю модель…"
+            if s == "running":
+                return f"расшифровка {int(st['progress'] * 100)}%"
+            if s == "paused":
+                return "пауза (идёт встреча)"
+            if s == "error":
+                return "ошибка: " + st["error"][:60]
+            if s == "cancelled" and not tr_mod.has_transcript(wav):
+                return "отменена"
+        return "готова" if tr_mod.has_transcript(wav) else ""
 
     def toggle_record_setting(self):
         self.settings["record_meetings"] = bool(self.record_meetings.get())
@@ -723,6 +845,10 @@ class App:
                 note += ". Предупреждения: " + "; ".join(result["errors"])
             self.last_event_text = "Запись сохранена: " + result["path"].name
             self._journal_note("Запись сохранена", note, initiator, file=result["path"].name)
+            if self.auto_transcribe.get() and tr_mod.LocalWhisper.available()[0]:
+                q = self.transcribe_queue()
+                q.set_paused(self.detector.blocks_analysis)
+                q.add(result["path"])
         self.refresh_records()
         self.refresh_status()
 
@@ -785,7 +911,7 @@ class App:
             info += f"\n\nЗапись сейчас недоступна: {why}"
         ttk.Label(self.tab_records, text=info, wraplength=1200, justify="left").pack(anchor="w", pady=(0, 8))
         cols = [("when", "Дата и время", 150), ("duration", "Длительность", 100), ("meeting", "Встреча", 300),
-                ("size", "Размер", 90), ("note", "Примечание", 520)]
+                ("size", "Размер", 90), ("tr", "Расшифровка", 170), ("note", "Примечание", 360)]
         self.records_tree = ttk.Treeview(self.tab_records, columns=[c[0] for c in cols], show="headings", height=16)
         for col, label, width in cols:
             self.records_tree.heading(col, text=label)
@@ -794,6 +920,9 @@ class App:
         self.records_tree.bind("<Double-1>", lambda _e: self.play_selected_record())
         bar = ttk.Frame(self.tab_records); bar.pack(fill="x", pady=8)
         ttk.Button(bar, text="Воспроизвести", command=self.play_selected_record).pack(side="left")
+        ttk.Button(bar, text="Расшифровать", command=self.transcribe_selected).pack(side="left", padx=5)
+        ttk.Button(bar, text="Открыть расшифровку", command=self.open_transcript).pack(side="left")
+        ttk.Button(bar, text="Отменить", command=self.cancel_transcription).pack(side="left", padx=5)
         ttk.Button(bar, text="Открыть папку", command=self.open_records_folder).pack(side="left", padx=5)
         ttk.Button(bar, text="Обновить", command=self.refresh_records).pack(side="left", padx=5)
         self.test_btn = ttk.Button(bar, text="Проверить запись (5 с)", command=self.test_recording)
@@ -806,6 +935,7 @@ class App:
     def refresh_records(self):
         if not hasattr(self, "records_tree"):
             return
+        selected = self.records_tree.selection()
         self.records_tree.delete(*self.records_tree.get_children())
         for item in rec_mod.list_recordings(self.rec_folder):
             stem = item["path"].stem
@@ -821,7 +951,10 @@ class App:
                 notes.append(f"убрано {int(item['trimmed_sec'])} с после встречи")
             self.records_tree.insert("", "end", iid=str(item["path"]), values=(
                 when, f"{dur // 3600}:{dur % 3600 // 60:02d}:{dur % 60:02d}", meeting,
-                f"{item['size'] / (1024 * 1024):.1f} МБ", "; ".join(notes)))
+                f"{item['size'] / (1024 * 1024):.1f} МБ", self.transcript_state_text(item["path"]), "; ".join(notes)))
+        keep = [i for i in selected if self.records_tree.exists(i)]
+        if keep:
+            self.records_tree.selection_set(keep)
 
     def test_recording(self):
         if self.recorder is not None:
@@ -1194,6 +1327,8 @@ class App:
             if self._tick_job is not None:
                 self.root.after_cancel(self._tick_job)
             self.analysis_cancel.set()
+            if getattr(self, "tq", None) is not None:
+                self.tq.close()
             if self.prompt is not None:
                 self.prompt.destroy()
             if self.recorder is not None or self._saving_threads:
@@ -1383,8 +1518,21 @@ def cli_record(seconds):
     return summary
 
 
+def cli_transcribe(path, size, language):
+    """MeetingHub.exe --transcribe FILE [модель] [язык]: расшифровать запись без окна."""
+    eng = tr_mod.LocalWhisper(data_dir() / "models", size=size)
+    txt = tr_mod.transcribe_file(path, eng, language)
+    if sys.stdout is not None:
+        print(txt.read_text(encoding="utf-8"))
+    return txt
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--transcribe"] and len(args) > 1:
+        cli_transcribe(args[1], args[2] if len(args) > 2 else tr_mod.DEFAULT_MODEL,
+                       args[3] if len(args) > 3 else "ru")
+        return
     if args[:1] == ["--audio-check"]:
         import audio_check
         report = Path(args[1]) if len(args) > 1 and not args[1].startswith("--") else \

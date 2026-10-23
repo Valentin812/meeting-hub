@@ -34,6 +34,8 @@ jobs:
           pyinstaller --noconfirm --clean --windowed --name MeetingHub
           --hidden-import audio_check --hidden-import support --hidden-import pyaudiowpatch
           --collect-data soundcard
+          --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
+          --hidden-import transcriber
           app.py
 
       - name: Code signing certificate (optional)
@@ -124,6 +126,23 @@ jobs:
           if ($j.system_peak -lt 1000) { throw "computer sound was not recorded" }
           if ([math]::Abs($j.duration - 4) -gt 0.5) { throw "wrong duration" }
           if (Test-Path "$env:LOCALAPPDATA\Programs\Meeting Hub\recordings") { throw "data written next to the program instead of the user profile" }
+
+      - name: Test - installed app transcribes speech (tiny model, synthesized voice)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
+          Add-Type -AssemblyName System.Speech
+          $wav = Join-Path $env:RUNNER_TEMP "speech.wav"
+          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
+          $s.SetOutputToWaveFile($wav, $fmt)
+          $s.Speak("Hello everyone. This is a test of the meeting transcription. We will ship the new version on Friday.")
+          $s.Dispose()
+          Start-Process -FilePath $exe -ArgumentList "--transcribe", $wav, "tiny", "en" -Wait
+          $txt = Get-Content (Join-Path $env:RUNNER_TEMP "speech.txt") -Encoding utf8 -Raw
+          Write-Output "::notice title=transcript::$($txt -replace '\s+',' ')"
+          if ($txt -notmatch '(?i)transcription|friday|version') { throw "speech was not recognized" }
 
       - name: Test - GUI starts, imports data of an old version placed next to the exe
         timeout-minutes: 5
