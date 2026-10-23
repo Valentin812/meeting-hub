@@ -42,9 +42,6 @@ class RecorderError(Exception):
 # ---------------------------------------------------------------------------
 # Источники звука
 # ---------------------------------------------------------------------------
-DEVICE_RATE = 48000   # родная частота WASAPI; на ней же работала запись в 1.2.0
-
-
 class SoundcardBackend:
     """Микрофон и loopback устройства вывода через пакет soundcard (WASAPI).
 
@@ -73,35 +70,64 @@ class SoundcardBackend:
             import ctypes
             ctypes.windll.ole32.CoUninitialize()
 
-    def open(self, name, rate):
+    # Варианты открытия устройства: если Windows отвергает формат (например «invalid argument»),
+    # пробуем следующий. Первым — то, что работало в 1.2.0.
+    CONFIGS = [(48000, 1, None), (48000, 2, None), (44100, 1, None), (44100, 2, None),
+               (48000, 1, 4800), (48000, 2, 4800), (16000, 1, None), (96000, 2, None)]
+
+    def device(self, name):
         import soundcard as sc
         if name == "mic":
-            dev = sc.default_microphone()
-        else:
-            speaker = sc.default_speaker()
-            dev = sc.get_microphone(id=str(speaker.id), include_loopback=True)
-        factor = DEVICE_RATE // rate if DEVICE_RATE % rate == 0 else 1
-        rec = dev.recorder(samplerate=rate * factor, channels=1)
-        rec.__enter__()
-        return _SoundcardSource(rec, getattr(dev, "name", name), factor)
+            return sc.default_microphone()
+        speaker = sc.default_speaker()
+        return sc.get_microphone(id=str(speaker.id), include_loopback=True)
+
+    def open(self, name, rate):
+        dev = self.device(name)
+        errors = []
+        for dev_rate, channels, blocksize in self.CONFIGS:
+            try:
+                rec = dev.recorder(samplerate=dev_rate, channels=channels, blocksize=blocksize)
+                rec.__enter__()
+            except Exception as e:
+                errors.append(f"{dev_rate}/{channels}/{blocksize}: {describe_error(e)}")
+                continue
+            src = _SoundcardSource(rec, getattr(dev, "name", name), dev_rate, rate)
+            src.config = f"{dev_rate} Гц, каналов {channels}, блок {blocksize or 'по умолчанию'}"
+            src.tried = errors
+            return src
+        raise RecorderError(f"{getattr(dev, 'name', name)}: ни один формат не подошёл — " + " | ".join(errors[:3]))
 
 
 class _SoundcardSource:
-    def __init__(self, rec, device, factor=1):
+    def __init__(self, rec, device, dev_rate, rate):
         self.rec = rec
         self.device = device
-        self.factor = factor
+        self.dev_rate = dev_rate
+        self.rate = rate
 
     def read(self, frames):
-        data = np.asarray(self.rec.record(numframes=frames * self.factor), dtype=np.float32)
-        data = data[:, 0] if data.ndim == 2 else data
-        return downsample(data, self.factor)
+        need = int(round(frames * self.dev_rate / self.rate))
+        data = np.asarray(self.rec.record(numframes=need), dtype=np.float32)
+        data = data.mean(axis=1) if data.ndim == 2 else data
+        return resample(data, self.dev_rate, self.rate)
 
     def close(self):
         try:
             self.rec.__exit__(None, None, None)
         except Exception:
             pass
+
+
+def resample(samples, src_rate, dst_rate):
+    """Перевести блок в нужную частоту: целое отношение — усреднением, иначе — линейной интерполяцией."""
+    if src_rate == dst_rate or not len(samples):
+        return samples.astype(np.float32, copy=False)
+    if src_rate % dst_rate == 0:
+        return downsample(samples, src_rate // dst_rate)
+    n = int(round(len(samples) * dst_rate / src_rate))
+    x_new = np.linspace(0, len(samples) - 1, n)
+    return np.interp(x_new, np.arange(len(samples)), samples).astype(np.float32)
 
 
 def downsample(samples, factor):
@@ -476,6 +502,7 @@ def self_test(seconds=3.0, backend=None):
         try:
             src = backend.open(name, RATE)
             info["device"] = getattr(src, "device", "")
+            info["config"] = getattr(src, "config", "")
             got, sq, peak = 0, 0.0, 0.0
             deadline = time.time() + seconds
             while time.time() < deadline:

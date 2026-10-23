@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from datetime import datetime
-import os, queue, json, csv, urllib.request, urllib.error, threading, re, time, subprocess, math
+import os, sys, queue, json, csv, urllib.request, urllib.error, threading, re, time, subprocess, math
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen2.5:3b"
@@ -98,7 +98,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.1.1"
+APP_VERSION = "5.1.2"
 TICK_MS = 1000
 
 WHO = {"auto": "Автоматика", "user": "Пользователь", "legacy": "v4.9 (архив)"}
@@ -605,6 +605,7 @@ class App:
         ttk.Button(bar, text="Обновить", command=self.refresh_records).pack(side="left", padx=5)
         self.test_btn = ttk.Button(bar, text="Проверить запись (5 с)", command=self.test_recording)
         self.test_btn.pack(side="right")
+        ttk.Button(bar, text="Подробная проверка звука…", command=self.full_audio_check).pack(side="right", padx=5)
         self.refresh_records()
 
     def refresh_records(self):
@@ -656,7 +657,8 @@ class App:
             lines = []
             for name, label in (("mic", "Микрофон (вы)"), ("system", "Звук компьютера (собеседники)")):
                 info = res.get(name, {})
-                lines.append(f"{label}\n  устройство: {info.get('device') or '—'}")
+                lines.append(f"{label}\n  устройство: {info.get('device') or '—'}"
+                             + (f" ({info['config']})" if info.get("config") else ""))
                 if info.get("error"):
                     lines.append(f"  ОШИБКА: {info['error']}")
                 else:
@@ -666,6 +668,36 @@ class App:
         self.log.info("recording self-test: %s", res)
         self._journal_note("Проверка записи", text.replace("\n", " "), "user")
         messagebox.showinfo("Проверка записи", text)
+
+    def full_audio_check(self):
+        if self.recorder is not None:
+            messagebox.showinfo("Проверка звука", "Сейчас идёт запись. Проверку можно запустить после неё.")
+            return
+        script = Path(__file__).resolve().with_name("audio_check.py")
+        report = script.with_name("meeting_hub_audio_report.txt")
+        self.last_event_text = "Подробная проверка звука: около 10 секунд…"
+        self.refresh_status()
+
+        def work():
+            try:
+                exe = sys.executable.replace("pythonw.exe", "python.exe")
+                subprocess.run([exe, str(script)], cwd=str(script.parent), timeout=120,
+                               capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                error = ""
+            except Exception as e:
+                error = str(e)
+            self._ui_calls.put((self._full_check_done, (report, error)))
+        threading.Thread(target=work, name="audio-check", daemon=True).start()
+
+    def _full_check_done(self, report, error):
+        self.last_event_text = (f"Проверка звука не запустилась: {error}" if error
+                                else f"Отчёт проверки звука: {report.name} — пришлите его разработчику.")
+        self.refresh_status()
+        if report.exists():
+            try:
+                os.startfile(str(report))  # type: ignore[attr-defined]
+            except (OSError, AttributeError):
+                pass
 
     def play_selected_record(self):
         sel = self.records_tree.selection()

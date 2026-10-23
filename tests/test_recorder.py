@@ -253,5 +253,61 @@ class Helpers(Base):
         self.assertIn("не найдено", res["system"]["error"])
 
 
+class FormatFallback(Base):
+    def test_resample_non_integer_ratio(self):
+        x = np.sin(np.linspace(0, 20, 4410)).astype(np.float32)
+        y = rec_mod.resample(x, 44100, 16000)
+        self.assertEqual(len(y), 1600)
+        self.assertEqual(y.dtype, np.float32)
+
+    def test_backend_tries_next_format_when_windows_rejects(self):
+        attempts = []
+
+        class FakeRec:
+            def __init__(self, rate, channels):
+                self.rate, self.channels = rate, channels
+
+            def __enter__(self):
+                attempts.append((self.rate, self.channels))
+                if self.channels == 1:
+                    raise RuntimeError("invalid argument")
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def record(self, numframes):
+                return np.full((numframes, self.channels), 0.5, dtype=np.float32)
+
+        class FakeDev:
+            name = "Микрофон (тест)"
+
+            def recorder(self, samplerate, channels, blocksize=None):
+                return FakeRec(samplerate, channels)
+
+        backend = rec_mod.SoundcardBackend.__new__(rec_mod.SoundcardBackend)
+        backend.device = lambda name: FakeDev()
+        src = backend.open("mic", 16000)
+        self.assertEqual(attempts[:2], [(48000, 1), (48000, 2)])
+        self.assertIn("48000", src.config)
+        self.assertEqual(len(src.tried), 1)
+        block = src.read(4000)
+        self.assertEqual(len(block), 4000)
+        self.assertAlmostEqual(float(block.mean()), 0.5, places=4)
+
+    def test_backend_reports_all_failures(self):
+        class BadDev:
+            name = "Сломанный"
+
+            def recorder(self, samplerate, channels, blocksize=None):
+                raise RuntimeError("invalid argument")
+
+        backend = rec_mod.SoundcardBackend.__new__(rec_mod.SoundcardBackend)
+        backend.device = lambda name: BadDev()
+        with self.assertRaises(RecorderError) as ctx:
+            backend.open("mic", 16000)
+        self.assertIn("ни один формат", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: python -m pip install numpy
       - name: Syntax
-        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py
+        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py audio_check.py
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
@@ -63,3 +63,12 @@ jobs:
         run: python -m pip install --upgrade -r requirements.txt
       - name: Record from a virtual sound card
         run: python tests/audio_probe.py
+      - name: Detailed audio check script (audio_check.py)
+        shell: pwsh
+        run: |
+          python audio_check.py
+          $r = Get-Content meeting_hub_audio_report.txt -Encoding utf8
+          $ok = ($r | Select-String ': OK').Count
+          $err = ($r | Select-String 'ОШИБКА').Count
+          Write-Output "::notice title=audio_check::OK=$ok ОШИБКА=$err"
+          if ($ok -lt 1) { throw "audio_check.py did not open any device" }
