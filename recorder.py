@@ -96,6 +96,9 @@ class SoundcardBackend:
             src.config = f"{dev_rate} Гц, каналов {channels}, блок {blocksize or 'по умолчанию'}"
             src.tried = errors
             return src
+        reasons = {e.split(": ", 1)[1] for e in errors}
+        if len(reasons) == 1:   # одна и та же причина для всех форматов — формат ни при чём
+            raise RecorderError(f"{getattr(dev, 'name', name)}: {reasons.pop()}")
         raise RecorderError(f"{getattr(dev, 'name', name)}: ни один формат не подошёл — " + " | ".join(errors[:3]))
 
 
@@ -280,7 +283,8 @@ class AudioRecorder:
         try:
             source = self.backend.open(name, self.rate)
         except Exception as e:
-            track.error = f"не удалось открыть {SOURCE_LABELS[name]}: {describe_error(e)}"
+            text = str(e) if isinstance(e, RecorderError) else describe_error(e)
+            track.error = f"не удалось открыть {SOURCE_LABELS[name]}: {text}"
             return
         track.device = getattr(source, "device", "")
         track.started = True
@@ -515,7 +519,7 @@ def self_test(seconds=3.0, backend=None):
             src.close()
             info.update(seconds=got / RATE, peak=peak, rms=(sq / got) ** 0.5 if got else 0.0)
         except Exception as e:
-            info["error"] = describe_error(e)
+            info["error"] = str(e) if isinstance(e, RecorderError) else describe_error(e)
         finally:
             leave = getattr(backend, "thread_exit", None)
             if leave:

@@ -111,8 +111,15 @@ def main():
 
 if __name__ == "__main__":
     try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
         main()
     except Exception:
         out("Проверка прервалась:\n" + traceback.format_exc())
     REPORT.write_text("\n".join(lines), encoding="utf-8")
-    print(f"\nОтчёт сохранён: {REPORT}")
+    try:
+        print(f"\nОтчёт сохранён: {REPORT}")
+    except Exception:
+        pass
