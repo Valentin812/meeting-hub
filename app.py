@@ -9,72 +9,14 @@ import os, sys, queue, json, csv, urllib.request, urllib.error, threading, re, t
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen2.5:3b"
 
-SYSTEM_PROMPT = """Ты — помощник по протоколированию рабочих встреч на русском языке.
-Работай ТОЛЬКО с фактами из переданной расшифровки. Не выдумывай решения, задачи, имена, суммы и сроки.
-Распознавание речи может содержать ошибки. Если смысл неясен, пометь фрагмент как требующий проверки.
-Различай:
-- summary: короткое резюме без повторов;
-- decisions: только явно принятые решения;
-- tasks: только явные поручения/действия. Если ответственный или срок не назван, оставь поле пустым;
-- open_questions: вопросы, которые остались без ответа или требуют уточнения.
-Верни строго JSON без markdown и без текста вокруг, по схеме:
-{
- "summary": ["..."],
- "decisions": [{"text":"...", "evidence":"дословный короткий фрагмент"}],
- "tasks": [{"task":"...", "owner":"", "deadline":"", "evidence":"дословный короткий фрагмент", "confidence":"high|medium|low"}],
- "open_questions": [{"question":"...", "evidence":"дословный короткий фрагмент"}],
- "uncertain_fragments": [{"text":"...", "reason":"..."}]
-}
-Не превращай предложение или обсуждение в решение, если согласие не выражено явно.
-Фразы «просит добавить», «можно добавить», «надо бы», «обсудили» сами по себе НЕ доказывают, что решение принято.
-Если нет явного подтверждения согласия, не добавляй фразу в decisions.
-Если неясно, было ли поручение принято, добавь фрагмент в uncertain_fragments, а не в tasks.
-Не выдумывай формулировки вроде «отменять не нужно», если этого нет в расшифровке.
-Не дублируй одну и ту же фразу в decisions и tasks без отдельного явного основания.
-В evidence приводи только короткую цитату, реально присутствующую в расшифровке.
-"""
+from analyzer import ollama_chat, analyze_transcript, SYSTEM_PROMPT  # noqa: E402,F401
+
 
 def ollama_request(model, transcript, cancel_event=None):
-    payload = {
-        "model": model, "stream": True, "format": "json",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": "Проанализируй расшифровку встречи. Верни JSON по схеме из системного сообщения.\n\nРАСШИФРОВКА:\n" + transcript}
-        ],
-        "options": {"temperature": 0.1, "num_thread": 2, "num_ctx": 4096}
-    }
-    req = urllib.request.Request(OLLAMA_URL, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                                headers={"Content-Type": "application/json"}, method="POST")
-    chunks = []
-    response = urllib.request.urlopen(req, timeout=900)
-    try:
-        while True:
-            if cancel_event is not None and cancel_event.is_set():
-                response.close()
-                raise InterruptedError("Анализ остановлен для встречи.")
-            line = response.readline()
-            if not line:
-                break
-            part = json.loads(line.decode("utf-8"))
-            if part.get("error"):
-                raise RuntimeError(part["error"])
-            text = part.get("message", {}).get("content", "")
-            if text:
-                chunks.append(text)
-            if part.get("done"):
-                break
-    finally:
-        response.close()
-    if cancel_event is not None and cancel_event.is_set():
-        raise InterruptedError("Анализ остановлен для встречи.")
-    content = "".join(chunks)
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, re.S)
-        if not match:
-            raise ValueError("Модель вернула ответ, который не удалось прочитать как JSON.")
-        return json.loads(match.group(0))
+    """Итоги встречи: длинные расшифровки режутся на части и объединяются (analyzer.py)."""
+    return analyze_transcript(transcript, lambda system, user: ollama_chat(model, system, user, cancel_event),
+                              cancel_event)
+
 
 def list_models():
     req = urllib.request.Request("http://localhost:11434/api/tags")
@@ -94,12 +36,13 @@ from tkinter import simpledialog
 import win_signals
 import recorder as rec_mod
 import transcriber as tr_mod
+import report as report_mod
 from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, BROWSERS, MEETING_APPS,
                               IDLE, ASKING, COUNTDOWN, IN_MEETING, ENDING,
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "5.5.0"
+APP_VERSION = "6.0.0"
 
 import support
 from support import app_dir, data_dir
@@ -759,6 +702,83 @@ class App:
         if not automatic:
             self.nb.select(self.tab_summary)
 
+    def make_protocol(self, wav, notify=""):
+        try:
+            path = report_mod.write_protocol(wav)
+        except Exception:
+            self.log.exception("Протокол не создан")
+            return None
+        if path is not None:
+            self._journal_note("Протокол готов", path.name, "auto", file=path.name)
+            if notify:
+                self.toast(notify, path)
+        self.refresh_records()
+        return path
+
+    def open_protocol(self):
+        sel = self.records_tree.selection()
+        if not sel:
+            messagebox.showinfo("Записи", "Сначала выберите запись.")
+            return
+        path = report_mod.protocol_paths(sel[0])[0]
+        if not path.exists():
+            path = self.make_protocol(sel[0])
+        if path is None:
+            messagebox.showinfo("Протокол", "Для этой записи ещё нет ни расшифровки, ни итогов. "
+                                "Нажмите «Расшифровать».")
+            return
+        self.open_path(path)
+
+    def open_path(self, path):
+        try:
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        except (OSError, AttributeError) as e:
+            messagebox.showerror("Открыть файл", f"Не удалось открыть: {e}")
+
+    def toast(self, text, path=None, seconds=25):
+        """Небольшое окно в углу экрана: не мешает, закрывается само."""
+        try:
+            win = tk.Toplevel(self.root)
+            win.overrideredirect(True)
+            win.attributes("-topmost", True)
+            frame = ttk.Frame(win, padding=12, relief="solid")
+            frame.pack()
+            ttk.Label(frame, text=text, font=("Segoe UI", 10, "bold"), wraplength=320).pack(anchor="w")
+            row = ttk.Frame(frame); row.pack(anchor="e", pady=(8, 0))
+            if path is not None:
+                ttk.Button(row, text="Открыть", command=lambda: (self.open_path(path), win.destroy())).pack(side="left")
+            ttk.Button(row, text="Закрыть", command=win.destroy).pack(side="left", padx=(6, 0))
+            win.update_idletasks()
+            x = win.winfo_screenwidth() - win.winfo_width() - 24
+            y = win.winfo_screenheight() - win.winfo_height() - 72
+            win.geometry(f"+{x}+{y}")
+            win.after(seconds * 1000, lambda: win.winfo_exists() and win.destroy())
+        except tk.TclError:
+            pass
+
+    def toggle_full_mode(self):
+        on = not (self.auto_transcribe.get() and self.auto_summary.get() and self.record_meetings.get())
+        if on:
+            ok, why = tr_mod.LocalWhisper.available()
+            if not ok:
+                messagebox.showerror("Полный режим", why)
+                return
+            if not messagebox.askokcancel(
+                    "Полный режим",
+                    "Каждая встреча будет записана, расшифрована на этом компьютере и превращена в итоги и "
+                    "протокол — без ваших действий.\n\nПри первой расшифровке один раз скачается модель "
+                    "распознавания речи (до 0,5 ГБ). Для итогов нужна Ollama (setup_ollama.bat).\n"
+                    "Участников встречи нужно предупреждать о записи.", parent=self.root):
+                return
+        self.record_meetings.set(on)
+        self.auto_transcribe.set(on)
+        self.auto_summary.set(on)
+        self.settings.update(record_meetings=on, auto_transcribe=on, auto_summary=on)
+        self.save_settings()
+        self.last_event_text = ("Полный режим включён: запись → расшифровка → итоги → протокол." if on
+                                else "Полный режим выключен.")
+        self.refresh_status()
+
     def transcribe_selected(self):
         sel = self.records_tree.selection()
         if not sel:
@@ -795,6 +815,8 @@ class App:
             self.last_event_text = f"Расшифровка готова: {Path(st['result']).name}"
             if self.auto_summary.get() and not self.analysis_running and not self.pending_transcript:
                 self.open_summary_for(key, rerun=False, automatic=True)
+            elif self.settings.get("auto_protocol", True):
+                self.make_protocol(key, notify="Расшифровка и протокол готовы")
         elif st["state"] == "error":
             self._journal_note("Ошибка расшифровки", f"{name}: {st['error']}", "auto", file=name)
             self.last_event_text = f"Ошибка расшифровки: {st['error']}"
@@ -818,6 +840,8 @@ class App:
             if s == "cancelled" and not tr_mod.has_transcript(wav):
                 return "отменена"
         if tr_mod.has_transcript(wav):
+            if report_mod.protocol_paths(wav)[0].exists():
+                return "готова, есть протокол"
             return "готова, есть итоги" if self.summary_path(wav).exists() else "готова"
         return ""
 
@@ -997,8 +1021,10 @@ class App:
         ttk.Button(bar, text="Расшифровать", command=self.transcribe_selected).pack(side="left", padx=5)
         ttk.Button(bar, text="Открыть расшифровку", command=self.open_transcript).pack(side="left")
         ttk.Button(bar, text="Итоги встречи", command=self.summarize_selected).pack(side="left", padx=5)
+        ttk.Button(bar, text="Протокол", command=self.open_protocol).pack(side="left")
         ttk.Button(bar, text="Отменить", command=self.cancel_transcription).pack(side="left", padx=5)
         ttk.Button(bar, text="Открыть папку", command=self.open_records_folder).pack(side="left", padx=5)
+        ttk.Button(bar, text="Полный режим вкл/выкл", command=self.toggle_full_mode).pack(side="left", padx=15)
         ttk.Button(bar, text="Обновить", command=self.refresh_records).pack(side="left", padx=5)
         self.test_btn = ttk.Button(bar, text="Проверить запись (5 с)", command=self.test_recording)
         self.test_btn.pack(side="right")
@@ -1493,14 +1519,25 @@ class App:
             except InterruptedError:
                 self.root.after(0, lambda: self.queue_analysis_after_meeting(transcript, model))
             except Exception as e:
-                self.root.after(0, lambda err=str(e): messagebox.showerror("Ошибка анализа", "Не удалось получить результат от Ollama.\n\n" + err))
-                self.root.after(0, lambda: setattr(self, "last_event_text", "Анализ не завершён."))
+                self.root.after(0, lambda err=str(e): self.analysis_failed(err, automatic))
             finally:
                 def finish():
                     self.analysis_running = False
                     self.refresh_status()
                 self.root.after(0, finish)
         threading.Thread(target=worker, daemon=True).start()
+
+    def analysis_failed(self, err, automatic):
+        src, self.analysis_source = getattr(self, "analysis_source", None), None
+        self.last_event_text = "Итоги не получены: " + err[:200]
+        if automatic:
+            # Без модальных окон: журнал + протокол из одной расшифровки, чтобы результат был в любом случае.
+            self._journal_note("Ошибка итогов", err[:300], "auto")
+            if src is not None:
+                self.make_protocol(src, notify="Итоги не получены (проверьте Ollama), но расшифровка готова")
+        else:
+            messagebox.showerror("Ошибка анализа", "Не удалось получить результат от Ollama.\n\n" + err)
+        self.refresh_status()
 
     def queue_analysis_after_meeting(self, transcript, model):
         self.pending_transcript = (transcript, model)
@@ -1519,6 +1556,7 @@ class App:
             except OSError as e:
                 self.log.warning("summary not saved: %s", e)
             self.refresh_records()
+            self.make_protocol(src, notify="Итоги встречи и протокол готовы")
         self.data = result
         self.summary.delete("1.0", "end")
         self.summary.insert("1.0", "\n".join("• " + str(x) for x in result.get("summary", [])) or "Резюме не сформировано.")
@@ -1606,6 +1644,7 @@ def cli_transcribe(path, size, language):
     """MeetingHub.exe --transcribe FILE [модель] [язык]: расшифровать запись без окна."""
     eng = tr_mod.LocalWhisper(data_dir() / "models", size=size)
     txt = tr_mod.transcribe_file(path, eng, language)
+    report_mod.write_protocol(path)
     if sys.stdout is not None:
         print(txt.read_text(encoding="utf-8"))
     return txt

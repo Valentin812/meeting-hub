@@ -143,6 +143,9 @@ jobs:
           $txt = Get-Content (Join-Path $env:RUNNER_TEMP "speech.txt") -Encoding utf8 -Raw
           Write-Output "::notice title=transcript::$($txt -replace '\s+',' ')"
           if ($txt -notmatch '(?i)transcription|friday|version') { throw "speech was not recognized" }
+          $proto = Join-Path $env:RUNNER_TEMP "speech.protocol.html"
+          if (-not (Test-Path $proto)) { throw "protocol was not created" }
+          if ((Get-Content $proto -Encoding utf8 -Raw) -notmatch '(?i)transcription|friday|version') { throw "protocol has no transcript" }
 
       - name: Test - GUI starts, imports data of an old version placed next to the exe
         timeout-minutes: 5
