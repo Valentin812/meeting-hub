@@ -862,7 +862,7 @@ class App:
     # ------------------------------------------------------------------
     # Повседневная работа: настройки, хранение, обновления
     # ------------------------------------------------------------------
-    KEEP_CHOICES = [("7 дней", 7), ("14 дней", 14), ("30 дней", 30), ("90 дней", 90), ("всегда", 0)]
+    KEEP_CHOICES = [("всегда", 0), ("7 дней", 7), ("14 дней", 14), ("30 дней", 30), ("90 дней", 90), ("180 дней", 180), ("365 дней", 365)]
 
     def open_settings_dialog(self):
         win = tk.Toplevel(self.root)
@@ -876,8 +876,8 @@ class App:
         tray_var = tk.BooleanVar(value=bool(self.settings.get("close_to_tray", True)))
         upd = tk.BooleanVar(value=bool(self.settings.get("check_updates", True)))
         keep_labels = [k for k, _ in self.KEEP_CHOICES]
-        keep_now = int(self.settings.get("keep_audio_days", 30))
-        keep = tk.StringVar(value=next((k for k, v in self.KEEP_CHOICES if v == keep_now), "30 дней"))
+        keep_now = int(self.settings.get("keep_audio_days", 0))
+        keep = tk.StringVar(value=next((k for k, v in self.KEEP_CHOICES if v == keep_now), "всегда"))
         model = tk.StringVar(value=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
         lang = tk.StringVar(value=self.settings.get("language", "ru"))
 
@@ -898,7 +898,7 @@ class App:
         ttk.Label(box, text="Хранить аудио").grid(row=row, column=0, sticky="w")
         ttk.Combobox(box, textvariable=keep, values=keep_labels, state="readonly", width=12).grid(row=row, column=1, sticky="w"); row += 1
         ttk.Label(box, wraplength=420, foreground="gray", text=(
-            "Удаляется только аудио, у которого уже есть расшифровка. Тексты, итоги и протоколы хранятся всегда. "
+            "По умолчанию аудио хранится всегда. Если выбрать срок, удаляется только аудио старше него и только с готовой расшифровкой; тексты, итоги и протоколы хранятся всегда. "
             "Час записи занимает около 220 МБ.")).grid(row=row, column=0, columnspan=2, sticky="w"); row += 1
 
         ttk.Label(box, text="Расшифровка", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(12, 0)); row += 1
@@ -942,7 +942,7 @@ class App:
 
     def housekeeping(self):
         """Раз в сутки: удалить старое аудио, у которого есть расшифровка."""
-        days = int(self.settings.get("keep_audio_days", 30))
+        days = int(self.settings.get("keep_audio_days", 0))
         protect = []                                      # идущая запись — .part.wav и без расшифровки, её не трогаем
         tq = getattr(self, "tq", None)
         if tq is not None:
