@@ -31,6 +31,8 @@ MODELS = {
     "medium": "лучшее качество, медленно на слабом ПК (~1,5 ГБ)",
 }
 DEFAULT_MODEL = "small"
+MODEL_MB = {"tiny": 75, "base": 145, "small": 465, "medium": 1530}
+MAX_TURN_CHARS = 280      # длиннее не склеиваем: в протоколе остаются метки времени по ходу речи
 SILENCE_RMS = 0.002       # канал тише этого — не расшифровываем вовсе
 
 
@@ -83,7 +85,8 @@ def merge(mine, theirs):
     # Соседние реплики одного говорящего с паузой меньше 1,5 с склеиваем в одну.
     merged = []
     for s in out:
-        if merged and merged[-1]["speaker"] == s["speaker"] and s["start"] - merged[-1]["end"] < 1.5:
+        if merged and merged[-1]["speaker"] == s["speaker"] and s["start"] - merged[-1]["end"] < 1.5 \
+                and len(merged[-1]["text"]) + len(s["text"]) <= MAX_TURN_CHARS:
             merged[-1]["end"] = max(merged[-1]["end"], s["end"])
             merged[-1]["text"] = (merged[-1]["text"] + " " + s["text"]).strip()
         else:
@@ -138,6 +141,14 @@ class LocalWhisper:
     def model_present(self):
         return any(self.model_dir.glob(f"models--Systran--faster-whisper-{self.size}/snapshots/*/model.bin"))
 
+    def downloaded_mb(self):
+        """Сколько уже скачано (для индикатора при первой загрузке модели)."""
+        root = self.model_dir / f"models--Systran--faster-whisper-{self.size}"
+        try:
+            return sum(f.stat().st_size for f in root.rglob("*") if f.is_file()) / (1024 * 1024)
+        except OSError:
+            return 0.0
+
     def load(self):
         if self.model is not None:
             return
@@ -165,7 +176,7 @@ class LocalWhisper:
         out = []
         for seg in segments:          # генератор: следующий сегмент считается только по запросу
             if should_stop is not None:
-                should_stop()
+                should_stop(float(seg.end))      # позиция в секундах — для процента готовности
             text = seg.text.strip()
             if text:
                 out.append({"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": text})
@@ -189,11 +200,11 @@ def transcribe_file(wav, engine, language="ru", should_stop=None, progress=None,
             parts.append([])
             continue
 
-        def check(base=done, n=len(samples)):
+        def check(pos=None, base=done, n=len(samples)):
             if should_stop is not None:
                 should_stop()
-            if progress is not None and total:
-                progress(min(0.99, (base + n * 0.5) / total))
+            if progress is not None and total and pos is not None:
+                progress(min(0.99, (base + min(n, pos * RATE)) / total))
         parts.append(engine.transcribe(samples, language, check))
         done += len(samples)
         if progress is not None and total:
@@ -218,7 +229,8 @@ def transcribe_file(wav, engine, language="ru", should_stop=None, progress=None,
 class TranscriptionQueue:
     """Фоновая очередь расшифровки с паузой на время встречи и отменой.
 
-    status: {путь: {'state': queued|loading|running|paused|done|error|cancelled, 'progress': 0..1, 'error': str}}
+    status: {путь: {'state': queued|downloading|loading|running|paused|done|error|cancelled,
+                    'progress': 0..1, 'error': str, 'downloaded_mb': float}}
     """
 
     def __init__(self, engine_factory, language="ru", on_done=None, log=None):
@@ -239,7 +251,7 @@ class TranscriptionQueue:
     def add(self, wav):
         key = str(wav)
         state = self.status.get(key, {}).get("state")
-        if state in ("queued", "loading", "running", "paused"):
+        if state in ("queued", "downloading", "loading", "running", "paused"):
             return False
         self.status[key] = {"state": "queued", "progress": 0.0, "error": ""}
         self.items.put(key)
@@ -263,10 +275,11 @@ class TranscriptionQueue:
         self.items.put(None)
 
     def busy(self):
-        return any(s["state"] in ("queued", "loading", "running", "paused") for s in self.status.values())
+        return any(s["state"] in ("queued", "downloading", "loading", "running", "paused")
+                   for s in self.status.values())
 
     def _should_stop(self, key):
-        def check():
+        def check(_pos=None):
             while self.paused.is_set() and not self.stop_event.is_set() and not self.cancel_current.is_set():
                 self.status[key]["state"] = "paused"
                 time.sleep(0.5)
@@ -274,6 +287,29 @@ class TranscriptionQueue:
                 raise Cancelled()
             self.status[key]["state"] = "running"
         return check
+
+    def _prepare(self, engine, st, check):
+        """Загрузить модель заранее; при первой загрузке показывать, сколько скачано."""
+        load = getattr(engine, "load", None)
+        if load is None or getattr(engine, "model", True) is not None:
+            return
+        present = getattr(engine, "model_present", lambda: True)()
+        total = MODEL_MB.get(getattr(engine, "size", ""), 0)
+        st["state"] = "downloading" if not present else "loading"
+        done = threading.Event()
+
+        def watch():
+            while not done.wait(1.0):
+                if total and hasattr(engine, "downloaded_mb"):
+                    st["downloaded_mb"] = engine.downloaded_mb()
+                    st["progress"] = min(0.99, st["downloaded_mb"] / total)
+        if not present:
+            threading.Thread(target=watch, daemon=True).start()
+        try:
+            load()
+        finally:
+            done.set()
+        check()
 
     def _run(self):
         _lower_priority()
@@ -292,7 +328,9 @@ class TranscriptionQueue:
                 if self.engine is None:
                     st["state"] = "loading"
                     self.engine = self.engine_factory()
+                self._prepare(self.engine, st, check)
                 st["state"] = "running"
+                st["progress"] = 0.0
                 txt = transcribe_file(key, self.engine, self.language, check,
                                       lambda p: st.__setitem__("progress", p))
                 st.update(state="done", progress=1.0, result=str(txt))

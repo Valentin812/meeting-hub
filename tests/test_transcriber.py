@@ -60,6 +60,26 @@ class Pure(Base):
         self.assertEqual(len(m), 1)
         self.assertEqual(m[0]["text"], "а б")
 
+    def test_long_turn_is_not_glued_into_one_line(self):
+        segs = [{"start": i * 3.0, "end": i * 3.0 + 2.5, "text": "слово " * 15} for i in range(10)]
+        m = tr.merge(segs, [])
+        self.assertGreater(len(m), 3)
+        self.assertTrue(all(len(s["text"]) <= tr.MAX_TURN_CHARS + 100 for s in m))
+
+    def test_progress_by_position(self):
+        w = self.dir / "p.wav"
+        make_wav(w, np.full(16000 * 10, 0.3, dtype=np.float32), np.zeros(10, dtype=np.float32))
+        seen = []
+
+        class PosEngine(Fake):
+            def transcribe(self, samples, language, should_stop=None):
+                for pos in (2.5, 5.0, 7.5):
+                    should_stop(pos)
+                return []
+        tr.transcribe_file(w, PosEngine(), progress=seen.append)
+        self.assertEqual([round(x, 2) for x in seen[:3]], [0.25, 0.5, 0.75])
+        self.assertEqual(seen[-1], 1.0)
+
     def test_format(self):
         txt = tr.format_text([{"start": 3725, "end": 3730, "text": "привет", "speaker": "Вы"}], "T")
         self.assertIn("[01:02:05] Вы: привет", txt)
@@ -148,6 +168,30 @@ class Queue(Base):
         self.assertEqual(q.status[str(w)]["error"], "нет модели")
         # после ошибки можно поставить снова
         self.assertTrue(q.add(w))
+        q.close()
+
+    def test_first_download_is_shown(self):
+        class Slow(Fake):
+            model = None
+
+            def model_present(self):
+                return False
+
+            def downloaded_mb(self):
+                return 232.5
+
+            def load(self):
+                time.sleep(1.5)
+                self.model = object()
+        eng = Slow()
+        eng.size = "small"
+        q = tr.TranscriptionQueue(lambda: eng)
+        w = self.wav()
+        q.add(w)
+        self.wait(q, w, ("downloading",))
+        time.sleep(1.2)
+        self.assertGreater(q.status[str(w)]["progress"], 0.4)
+        self.wait(q, w, ("done",))
         q.close()
 
     def test_no_duplicates(self):

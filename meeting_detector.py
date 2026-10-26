@@ -60,7 +60,8 @@ OWN_PROCESSES = {"python.exe", "pythonw.exe", "meetinghub.exe"}
 # strict=True — заголовок сам по себе указывает на комнату встречи,
 # поэтому такое окно без микрофона может вызвать вопрос «это встреча?».
 DEFAULT_PATTERNS = [
-    {"pattern": "meet - ", "label": "Google Meet", "strict": True},
+    # «Meet - abc-defg-hij - Google Chrome»: только в начале заголовка, иначе ловит «… | MRM meet - Google Chrome».
+    {"pattern": "meet - ", "label": "Google Meet", "strict": True, "start": True},
     {"pattern": "google meet", "label": "Google Meet", "strict": False},
     {"pattern": "телемост", "label": "Яндекс Телемост", "strict": False},
     {"pattern": "telemost", "label": "Яндекс Телемост", "strict": False},
@@ -213,7 +214,7 @@ class MeetingDetector:
                 continue
             seen.add(norm)
             merged.append({"pattern": norm, "label": item.get("label") or item.get("pattern", "").strip(),
-                           "strict": bool(item.get("strict", True))})
+                           "strict": bool(item.get("strict", True)), "start": bool(item.get("start", False))})
         self.patterns = merged
         self.ignore = [normalize(p.get("pattern", "") if isinstance(p, dict) else p)
                        for p in ignore_patterns]
@@ -223,10 +224,10 @@ class MeetingDetector:
         low = normalize(title)
         if not low or any(p in low for p in self.ignore):
             return None
-        for item in self.patterns:
-            if item["pattern"] in low:
-                return item
-        return None
+        # Самый длинный (самый конкретный) подходящий шаблон: выученный «… | mrm meet» важнее общего «meet - ».
+        found = [item for item in self.patterns
+                 if (low.lstrip().startswith(item["pattern"]) if item.get("start") else item["pattern"] in low)]
+        return max(found, key=lambda item: len(item["pattern"]), default=None)
 
     # ---------- сигналы ----------
     def evaluate(self, obs):

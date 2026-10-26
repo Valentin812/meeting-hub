@@ -42,7 +42,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.0.1"
 
 import support
 from support import app_dir, data_dir
@@ -539,7 +539,9 @@ class App:
             parts.append("сохраняю запись…")
         tq = getattr(self, "tq", None)
         if tq is not None and tq.busy():
-            parts.append("расшифровка: пауза" if tq.paused.is_set() else "расшифровка идёт")
+            downloading = any(x["state"] == "downloading" for x in tq.status.values())
+            parts.append("расшифровка: пауза" if tq.paused.is_set() else
+                         "скачиваю модель расшифровки" if downloading else "расшифровка идёт")
         if self.analysis_running:
             parts.append("ИИ: анализ идёт")
         elif self.pending_transcript:
@@ -677,7 +679,7 @@ class App:
         self.trans.delete("1.0", "end")
         self.trans.insert("1.0", text)
         self.name.delete(0, "end")
-        self.name.insert(0, meta.get("meeting") or meta.get("window") or wav.stem)
+        self.name.insert(0, meta.get("window") or meta.get("meeting") or wav.stem)
         stem = wav.stem
         if len(stem) >= 8 and stem[:8].isdigit():
             self.date.delete(0, "end")
@@ -829,6 +831,10 @@ class App:
             s = st["state"]
             if s == "queued":
                 return "в очереди"
+            if s == "downloading":
+                mb = int(st.get("downloaded_mb") or 0)
+                total = tr_mod.MODEL_MB.get(self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL), 0)
+                return f"скачиваю модель {mb} из {total} МБ (один раз)"
             if s == "loading":
                 return "загружаю модель…"
             if s == "running":
