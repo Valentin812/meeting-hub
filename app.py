@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.2.1"
+APP_VERSION = "7.2.2"
 
 import support
 from support import app_dir, data_dir
@@ -1444,8 +1444,38 @@ def cli_transcribe(path, size, language):
     return txt
 
 
+def cli_play_test(seconds=1.5):
+    """MeetingHub.exe --play-test: проиграть тон внутри программы и записать, каким способом вышел звук."""
+    import wave
+    import numpy as np
+    import player as player_mod
+    path = data_dir() / "play_test.wav"
+    t = np.arange(int(16000 * 3)) / 16000
+    tone = (np.sin(2 * np.pi * 440 * t) * 8000).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(np.stack([tone, tone], axis=1).tobytes())
+    p = player_mod.Player()
+    result = {"ok": False}
+    try:
+        p.load(path)
+        p.play()
+        time.sleep(seconds)
+        result = {"ok": True, "backend": getattr(p.backend, "name", "?"), "position": round(p.position, 2),
+                  "config": getattr(p.backend, "config", None), "errors": p.errors}
+    except Exception as e:
+        result = {"ok": False, "error": str(e), "errors": p.errors}
+    finally:
+        p.close()
+    (data_dir() / "play_test.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--play-test"]:
+        cli_play_test()
+        return
     if args[:1] == ["--transcribe"] and len(args) > 1:
         cli_transcribe(args[1], args[2] if len(args) > 2 else tr_mod.DEFAULT_MODEL,
                        args[3] if len(args) > 3 else "ru")

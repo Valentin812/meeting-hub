@@ -130,6 +130,19 @@ jobs:
           if ([math]::Abs($j.duration - 4) -gt 0.5) { throw "wrong duration" }
           if (Test-Path "$env:LOCALAPPDATA\Programs\Meeting Hub\recordings") { throw "data written next to the program instead of the user profile" }
 
+      - name: Test - installed app plays a recording inside the program
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
+          $data = "$env:LOCALAPPDATA\Meeting Hub"
+          Start-Process -FilePath $exe -ArgumentList "--play-test" -Wait
+          $j = Get-Content "$data\play_test.json" -Encoding utf8 -Raw
+          Write-Output "::notice title=exe play_test::$j"
+          $r = $j | ConvertFrom-Json
+          if (-not $r.ok) { throw "in-app playback failed: $j" }
+          if ($r.position -lt 1.0) { throw "playback did not advance: $j" }
+
       - name: Test - installed app transcribes speech (tiny model, synthesized voice)
         timeout-minutes: 15
         shell: pwsh
