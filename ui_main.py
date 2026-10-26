@@ -7,6 +7,7 @@
 import csv
 import json
 import os
+import re
 import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,10 +27,27 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
 SEARCH_HINT = "Поиск: название, слова из разговора…"
 
 
-def day_label(stem, today=None):
+STAMP_RE = re.compile(r"(20\d\d)[-_.]?(\d\d)[-_.]?(\d\d)(?:[ _T.-]?(\d\d)[-_:.]?(\d\d))?")
+
+
+def parse_stamp(stem):
+    """(дата, «чч:мм» или "") из имени записи: 20261026_152923, 2026-10-08_06-16 и похожих."""
+    m = STAMP_RE.search(stem or "")
+    if not m:
+        return None, ""
     try:
-        d = datetime.strptime(stem[:8], "%Y%m%d").date()
+        d = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
     except ValueError:
+        return None, ""
+    hm = ""
+    if m.group(4) and int(m.group(4)) < 24 and int(m.group(5)) < 60:
+        hm = f"{m.group(4)}:{m.group(5)}"
+    return d, hm
+
+
+def day_label(stem, today=None):
+    d, _hm = parse_stamp(stem)
+    if d is None:
         return "Без даты"
     today = today or datetime.now().date()
     if d == today:
@@ -40,7 +58,7 @@ def day_label(stem, today=None):
 
 
 def clock(stem):
-    return f"{stem[9:11]}:{stem[11:13]}" if len(stem) >= 13 else ""
+    return parse_stamp(stem)[1]
 
 
 def dur_text(sec):
@@ -90,6 +108,9 @@ class MainWindow:
         ttk.Label(header, text="Meeting Hub", style="Title.TLabel").pack(side="left")
         self.status = widgets.Pill(header, pal)
         self.status.pack(side="left", padx=(16, 0))
+        self.work = widgets.Pill(header, pal, size=9)          # фоновая обработка — отдельно от встречи
+        self.work.bind("<Button-1>", lambda _e: self.select_working())
+        self.work.configure(cursor="hand2")
         ttk.Button(header, text="⚙", width=3, command=self.open_settings_dialog).pack(side="right")
         self.rec_btn = ttk.Button(header, text="●  Записать", style="Accent.TButton",
                                   command=self.toggle_recording_button)
@@ -245,6 +266,13 @@ class MainWindow:
     # ------------------------------------------------------------------
     SHORT = {"done": "итоги", "text": "текст", "audio": "аудио", "error": "ошибка"}
 
+    @staticmethod
+    def busy_chip(state):
+        if state.endswith("%"):
+            return state.split()[-1]
+        return {"готовлю итоги": "итоги…", "итоги в очереди": "очередь", "в очереди": "очередь",
+                "ждёт конца встречи": "пауза"}.get(state, "модель" if state.startswith("модель") else "в работе")
+
     def meeting_state(self, item):
         """(текст состояния, ключ состояния)."""
         wav = item["path"]
@@ -282,7 +310,7 @@ class MainWindow:
         for it in items:
             stem = it["path"].stem
             state, key = self.meeting_state(it)
-            chip = self.SHORT.get(key) or (state.split()[-1] if state.endswith("%") else "в работе")
+            chip = self.SHORT.get(key) or self.busy_chip(state)
             info = " · ".join(x for x in (clock(stem), dur_text(it.get("duration_sec"))) if x)
             rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": meeting_title(it),
                          "info": info, "chip": chip, "key": key})
@@ -721,24 +749,64 @@ class MainWindow:
             return "Встреча закончилась?", "busy"
         if st == IN_MEETING:
             return "Идёт встреча", "meet"
-        if self._saving_threads:
-            return "Сохраняю запись…", "busy"
-        tq = getattr(self, "tq", None)
-        if tq is not None and tq.busy():
-            if any(x["state"] == "downloading" for x in tq.status.values()):
-                return "Скачиваю модель распознавания…", "busy"
-            return "Расшифровываю встречу…", "busy"
-        if self.analysis_running or self.summary_jobs:
-            return "Готовлю итоги…", "busy"
         if not self.auto_detect.get():
             return "Автообнаружение выключено", "off"
         return "Жду встречу", "ok"
 
+    def work_view(self):
+        """Что обрабатывается в фоне: расшифровка и итоги — каждое своё, с очередью. "" — ничего."""
+        parts = []
+        if self._saving_threads:
+            parts.append("сохраняю запись")
+        tq = getattr(self, "tq", None)
+        if tq is not None:
+            states = [st for st in tq.status.values()]
+            queued = sum(1 for st in states if st["state"] in ("queued", "loading"))
+            cur = next((st for st in states if st["state"] in ("running", "downloading", "paused")), None)
+            if cur is not None:
+                if cur["state"] == "downloading":
+                    text = f"скачиваю модель {int(cur.get('downloaded_mb') or 0)} МБ"
+                elif cur["state"] == "paused":
+                    text = "расшифровка на паузе"
+                else:
+                    text = f"расшифровка {int(cur['progress'] * 100)}%"
+                parts.append(text + (f" (ещё {queued})" if queued else ""))
+            elif queued:
+                parts.append(f"расшифровка: в очереди {queued}")
+        jobs = len(self.summary_jobs)
+        if self.analysis_running:
+            parts.append("итоги" + (f" (ещё {jobs})" if jobs else ""))
+        elif jobs:
+            parts.append(f"итоги: в очереди {jobs}" + (" — после встречи" if self.detector.blocks_analysis else ""))
+        if not parts:
+            return ""
+        text = " · ".join(parts)
+        return "⟳  " + text[0].upper() + text[1:]
+
+    def select_working(self):
+        """Щелчок по метке обработки — показать встречу, которая сейчас обрабатывается."""
+        tq = getattr(self, "tq", None)
+        target = self.analysis_source
+        if tq is not None and tq.current:
+            target = tq.current
+        if target is not None and self.records_tree.exists(str(target)):
+            self.selected = Path(target)
+            self.records_tree.select(str(target))
+            self.show_meeting(self.selected, force=True)
+
     def refresh_status(self):
         text, kind = self.status_view()
         bg, fg = self.pal["pill"][kind]
+        work = self.work_view()
         try:
             self.status.set(text, bg, fg, outer=self.pal["bg"])
+            if work:
+                wb, wf = self.pal["pill"]["busy"]
+                self.work.set(work, wb, wf, outer=self.pal["bg"])
+                if not self.work.winfo_ismapped():
+                    self.work.pack(side="left", padx=(8, 0), after=self.status)
+            elif self.work.winfo_ismapped():
+                self.work.pack_forget()
             self.rec_btn.config(text="■  Остановить" if self.recorder is not None else "●  Записать")
             sub = self.last_event_text or ""
             levels = self.recording_levels_text()
@@ -746,7 +814,8 @@ class MainWindow:
                 sub = levels + ("   ·   " + sub if sub else "")
             self.substatus.config(text=sub)
             if self.tray is not None:
-                self.tray.update("Meeting Hub · " + text.replace("●", "").strip())
+                tip = text.replace("●", "").strip() + ("\n" + work.replace("⟳", "").strip() if work else "")
+                self.tray.update("Meeting Hub · " + tip)
         except tk.TclError:
             pass
         self.check_recording_health()
@@ -967,7 +1036,7 @@ class MainWindow:
         for text in (self.sum_text, self.tr_text):
             theme.text_style(text, self.pal)
             text.configure(state="disabled")
-        self.status.pal = self.pal
+        self.status.pal = self.work.pal = self.pal
         self.records_tree.set_pal(self.pal)
         self.action_bar.configure(bg=self.pal["select"])
         self.action_text.configure(bg=self.pal["select"], fg=self.pal["text"])
