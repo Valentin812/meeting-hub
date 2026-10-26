@@ -37,7 +37,8 @@ def _dur(sec):
 
 
 def _title(wav, meta):
-    return meta.get("meeting") or meta.get("window") or Path(wav).stem
+    # Заголовок окна конкретнее метки сервиса («Room … | MRM meet» вместо «Google Meet»).
+    return meta.get("window") or meta.get("meeting") or Path(wav).stem
 
 
 def _when(wav):

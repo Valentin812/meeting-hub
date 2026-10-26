@@ -253,5 +253,18 @@ class Helpers(unittest.TestCase):
         self.assertEqual(suggest_pattern("Телемост - Google Chrome"), "Телемост")
 
 
+class PatternLabels(unittest.TestCase):
+    def test_google_meet_only_at_title_start(self):
+        d = MeetingDetector()
+        self.assertEqual(d.match_title("Meet - abc-defg-hij - Google Chrome")["label"], "Google Meet")
+        self.assertIsNone(d.match_title("Room Pr40jnimjd | MRM meet - Google Chrome"))
+
+    def test_most_specific_learned_pattern_wins(self):
+        d = MeetingDetector([{"pattern": "| MRM meet", "label": "MRM meet"}])
+        self.assertEqual(d.match_title("Room Pr40jnimjd | MRM meet - Google Chrome")["label"], "MRM meet")
+        d = MeetingDetector([{"pattern": "google meet - планёрка", "label": "Планёрка"}])
+        self.assertEqual(d.match_title("Google Meet - планёрка - Google Chrome")["label"], "Планёрка")
+
+
 if __name__ == "__main__":
     unittest.main()
