@@ -18,6 +18,7 @@ import report as report_mod
 import theme
 import transcriber as tr_mod
 import widgets
+import player as player_mod
 from meeting_detector import ASKING, COUNTDOWN, ENDING, IN_MEETING
 
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
@@ -129,14 +130,31 @@ class MainWindow:
         self.d_meta.pack(anchor="w", fill="x", pady=(2, 0))
         btns = ttk.Frame(head)
         btns.pack(anchor="w", pady=(10, 0))
-        self.play_btn = ttk.Button(btns, text="▶  Слушать", command=self.play_selected_record)
-        self.play_btn.pack(side="left")
         self.proto_btn = ttk.Button(btns, text="Протокол (Word)", command=self.open_protocol)
-        self.proto_btn.pack(side="left", padx=(6, 0))
+        self.proto_btn.pack(side="left")
         self.more_btn = ttk.Menubutton(btns, text="Ещё", width=6)
         self.more_btn.pack(side="left", padx=(6, 0))
         self.more_menu = tk.Menu(self.more_btn, tearoff=False)
         self.more_btn["menu"] = self.more_menu
+
+        # Проигрыватель
+        self.pbar = ttk.Frame(head)
+        self.pbar.pack(fill="x", pady=(10, 0))
+        self.play_btn = ttk.Button(self.pbar, text="▶", width=3, style="Accent.TButton",
+                                   command=self.play_selected_record)
+        self.play_btn.pack(side="left")
+        self.p_time = ttk.Label(self.pbar, text="0:00 / 0:00", style="Muted.TLabel", width=15, anchor="e")
+        self.p_time.pack(side="right")
+        self.p_scale = ttk.Scale(self.pbar, from_=0, to=1, orient="horizontal")
+        self.p_scale.pack(side="left", fill="x", expand=True, padx=10)
+        self.p_scale.bind("<ButtonPress-1>", lambda _e: setattr(self, "_p_drag", True))
+        self.p_scale.bind("<ButtonRelease-1>", self._player_seek_release)
+        self.p_scale.configure(command=self._player_scale_moved)
+        self.p_note = ttk.Label(self.pbar, text="", style="Small.TLabel")
+        self.player = None
+        self._p_drag = False
+        self._p_job = None
+        self._segments = []
 
         def rewrap(event):
             for lbl in (self.d_title, self.d_meta):
@@ -327,7 +345,7 @@ class MainWindow:
         if meta.get("audio_deleted") or not wav.exists():
             parts.append("аудио удалено")
         self.d_meta.config(text=" · ".join(parts))
-        self.play_btn.state(["!disabled"] if wav.exists() else ["disabled"])
+        self._player_show(wav, meta)
         self.proto_btn.state(["!disabled"] if tr_mod.has_transcript(wav) or self.summary_path(wav).exists()
                              else ["disabled"])
         self._fill_more_menu(wav)
@@ -458,16 +476,149 @@ class MainWindow:
     def _render_transcript(self, wav):
         data = read_json(tr_mod.output_paths(wav)[1]) or {}
         segs = data.get("segments") or []
+        text = self.tr_text
+        for tag in text.tag_names():
+            if tag.startswith("seg"):
+                text.tag_delete(tag)
+        self._segments = []
         if not segs:
-            self._write(self.tr_text, [("Расшифровки пока нет.", ("muted",))])
+            self._write(text, [("Расшифровки пока нет.", ("muted",))])
             return
         out = []
-        for s in segs:
+        for i, s in enumerate(segs):
+            tag = f"seg{i}"
             me = s.get("speaker") == tr_mod.SPEAKERS[0]
-            out.append((tr_mod.stamp(s.get("start", 0)) + "   ", ("time",)))
-            out.append((s.get("speaker", "") + "\n", ("me" if me else "they",)))
-            out.append((s.get("text", "") + "\n\n", ()))
-        self._write(self.tr_text, out)
+            out.append((tr_mod.stamp(s.get("start", 0)) + "   ", ("time", tag)))
+            out.append((s.get("speaker", "") + "\n", ("me" if me else "they", tag)))
+            out.append((s.get("text", "") + "\n\n", (tag,)))
+            self._segments.append((float(s.get("start", 0)), float(s.get("end", 0)), tag))
+        self._write(text, out)
+        if wav.exists():
+            for start, _end, tag in self._segments:
+                text.tag_bind(tag, "<Button-1>", lambda _e, t=start: self.play_from(t))
+                text.tag_bind(tag, "<Enter>", lambda _e: text.configure(cursor="hand2"))
+                text.tag_bind(tag, "<Leave>", lambda _e: text.configure(cursor=""))
+            self._now_tag = None
+
+    # ------------------------------------------------------------------
+    # Проигрыватель
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _clock(sec):
+        sec = int(sec)
+        return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
+
+    def _player_show(self, wav, meta):
+        p = self.player
+        if p is not None and p.path is not None and p.path != wav:
+            p.stop()
+            p.path = None
+        if not wav.exists():
+            for w in (self.play_btn, self.p_scale, self.p_time):
+                w.pack_forget()
+            self.p_note.config(text="Аудио удалено по сроку хранения — текст и итоги сохранены.")
+            self.p_note.pack(side="left")
+            return
+        self.p_note.pack_forget()
+        if not self.play_btn.winfo_ismapped():
+            self.play_btn.pack(side="left")
+            self.p_time.pack(side="right")
+            self.p_scale.pack(side="left", fill="x", expand=True, padx=10)
+        if p is None or p.path != wav:
+            dur = float(meta.get("duration_sec") or 0)
+            self.p_scale.configure(to=max(dur, 1))
+            self.p_scale.set(0)
+            self.p_time.config(text=f"0:00 / {self._clock(dur)}")
+            self.play_btn.config(text="▶")
+
+    def _ensure_player(self, wav):
+        if self.player is None:
+            self.player = player_mod.Player()
+        if self.player.path != wav:
+            self.player.load(wav)
+            self.p_scale.configure(to=max(self.player.duration, 1))
+
+    def play_selected_record(self):
+        wav = self.current()
+        if wav is None:
+            return
+        try:
+            self._ensure_player(wav)
+            self.player.toggle()
+        except Exception as e:
+            self._player_failed(wav, e)
+            return
+        self._player_update()
+
+    def play_from(self, sec):
+        wav = self.selected
+        if wav is None or not wav.exists():
+            return
+        try:
+            self._ensure_player(wav)
+            self.player.seek(max(0.0, sec - 0.3))
+            if not self.player.playing:
+                self.player.play()
+        except Exception as e:
+            self._player_failed(wav, e)
+            return
+        self._player_update()
+
+    def _player_failed(self, wav, err):
+        self.log.warning("player failed: %s", err)
+        if messagebox.askyesno("Прослушивание", f"Не удалось воспроизвести запись в программе: {err}\n\n"
+                               "Открыть её в стандартном проигрывателе Windows?", parent=self.root):
+            self.open_path(wav)
+
+    def _player_scale_moved(self, value):
+        if self._p_drag and self.player is not None:
+            self.p_time.config(text=f"{self._clock(float(value))} / {self._clock(self.player.duration)}")
+
+    def _player_seek_release(self, _e=None):
+        self._p_drag = False
+        wav = self.selected
+        if wav is None or not wav.exists():
+            return
+        try:
+            self._ensure_player(wav)
+            self.player.seek(float(self.p_scale.get()))
+        except Exception as e:
+            self._player_failed(wav, e)
+        self._player_update()
+
+    def _player_update(self):
+        if self._p_job is not None:
+            self.root.after_cancel(self._p_job)
+            self._p_job = None
+        p = self.player
+        if p is None:
+            return
+        playing = p.playing
+        self.play_btn.config(text="❚❚" if playing else "▶")
+        if not self._p_drag:
+            self.p_scale.set(p.position)
+            self.p_time.config(text=f"{self._clock(p.position)} / {self._clock(p.duration)}")
+        self._highlight_segment(p.position if playing or p.position > 0 else None)
+        if playing:
+            self._p_job = self.root.after(200, self._player_update)
+
+    def _highlight_segment(self, pos):
+        text = self.tr_text
+        now = None
+        if pos is not None:
+            for start, end, tag in self._segments:
+                if start - 0.2 <= pos <= max(end, start + 0.5):
+                    now = tag
+                    break
+        if now == getattr(self, "_now_tag", None):
+            return
+        text.tag_remove("now", "1.0", "end")
+        if now is not None:
+            ranges = text.tag_ranges(now)
+            if ranges:
+                text.tag_add("now", ranges[0], ranges[-1])
+                text.see(ranges[0])
+        self._now_tag = now
 
     # ------------------------------------------------------------------
     # Действия со встречей

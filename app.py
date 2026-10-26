@@ -38,6 +38,7 @@ import recorder as rec_mod
 import transcriber as tr_mod
 import report as report_mod
 import daily
+import updater
 import tray as tray_mod
 import theme
 from ui_main import MainWindow
@@ -46,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.1.0"
+APP_VERSION = "7.2.0"
 
 import support
 from support import app_dir, data_dir
@@ -368,6 +369,8 @@ class App(MainWindow):
         if not self.settings.get("first_run_done"):
             self.root.after(600, self.open_first_run)
         self.start_tray()
+        import shutil
+        shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
         self.root.after(20 * 1000, lambda: self.check_updates(manual=False))
         self._tick_job = self.root.after(800, self.tick)
@@ -643,7 +646,7 @@ class App(MainWindow):
                 messagebox.showinfo("Обновления", f"Не удалось проверить: {error}" if error else
                                     f"Установлена последняя версия ({APP_VERSION}).")
             return
-        version, url, page = found
+        version, asset, page = found
         if self.settings.get("skip_version") == version and not manual:
             return
         self.last_event_text = f"Доступна новая версия {version}"
@@ -653,21 +656,89 @@ class App(MainWindow):
         except tk.TclError:
             return
         if hidden and not manual:
-            # Не показываем диалог поверх работы: только уведомление у часов.
+            # Не показываем диалог поверх работы: уведомление у часов, вопрос — когда откроют окно.
+            self.pending_update = found
             if self.tray is not None:
-                self.tray.notify(f"Доступна версия {version}. Настройки → «Проверить сейчас», чтобы обновиться.")
+                self.tray.notify(f"Доступна версия {version}. Откройте Meeting Hub, чтобы обновить.")
             return
+        auto = updater.can_self_update() and asset is not None
         answer = messagebox.askyesnocancel(
             "Доступно обновление",
             f"Вышла версия Meeting Hub {version} (у вас {APP_VERSION}).\n\n"
-            "«Да» — скачать установщик (запустите его, данные сохранятся).\n"
-            "«Нет» — напомнить позже. «Отмена» — пропустить эту версию.")
-        if answer:
+            + ("«Да» — обновить сейчас: программа скачает обновление, установит его и перезапустится "
+               "(около минуты, записи и настройки сохранятся).\n" if auto else
+               "«Да» — открыть страницу загрузки.\n")
+            + "«Нет» — напомнить позже. «Отмена» — пропустить эту версию.", parent=self.root)
+        if answer and auto:
+            self.start_update(version, asset)
+        elif answer:
             import webbrowser
-            webbrowser.open(url or page)
+            webbrowser.open((asset or {}).get("url") or page)
         elif answer is None:
             self.settings["skip_version"] = version
             self.save_settings()
+
+    def start_update(self, version, asset):
+        if self.recorder is not None or self.detector.in_meeting:
+            messagebox.showinfo("Обновление", "Сейчас идёт встреча или запись. Обновите программу после неё: "
+                                "⚙ → «Хранение» → «Проверить сейчас».", parent=self.root)
+            return
+        tq = getattr(self, "tq", None)
+        if (tq is not None and tq.busy()) or self.analysis_running:
+            if not messagebox.askyesno("Обновление", "Сейчас обрабатывается встреча. Обработка продолжится после "
+                                       "обновления заново. Обновить сейчас?", parent=self.root):
+                return
+        win = tk.Toplevel(self.root)
+        win.title("Обновление Meeting Hub")
+        win.transient(self.root)
+        win.resizable(False, False)
+        box = ttk.Frame(win, padding=20)
+        box.pack(fill="both", expand=True)
+        ttk.Label(box, text=f"Обновление до версии {version}", style="H2.TLabel").pack(anchor="w")
+        label = ttk.Label(box, text="Скачиваю…", style="Muted.TLabel", width=52)
+        label.pack(anchor="w", pady=(8, 6))
+        bar = ttk.Progressbar(box, mode="determinate", maximum=100, length=420)
+        bar.pack(fill="x")
+        cancel = threading.Event()
+        btn = ttk.Button(box, text="Отмена", command=cancel.set)
+        btn.pack(anchor="e", pady=(14, 0))
+        win.protocol("WM_DELETE_WINDOW", cancel.set)
+
+        def progress(done, total):
+            def ui():
+                if total:
+                    bar["value"] = done * 100 / total
+                    label.config(text=f"Скачиваю: {done / 1048576:.0f} из {total / 1048576:.0f} МБ")
+            self._ui_calls.put((ui, ()))
+
+        def work():
+            try:
+                path = updater.download(asset, self.data_dir / "updates", progress=progress, cancel=cancel)
+                self._ui_calls.put((finish, (path, "")))
+            except Exception as e:
+                self._ui_calls.put((finish, (None, str(e))))
+
+        def finish(path, error):
+            if path is None:
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+                if "отменено" not in error:
+                    messagebox.showerror("Обновление", error, parent=self.root)
+                return
+            label.config(text="Устанавливаю… Программа закроется и через минуту откроется снова.")
+            bar["value"] = 100
+            btn.state(["disabled"])
+            self._journal_note("Обновление", f"Установка версии {version}", "user")
+            try:
+                updater.launch_installer(path)
+            except OSError as e:
+                messagebox.showerror("Обновление", f"Не удалось запустить установку: {e}", parent=self.root)
+                win.destroy()
+                return
+            self.root.after(1500, self.quit_app)
+        threading.Thread(target=work, name="update-download", daemon=True).start()
 
     def _journal_note(self, event, reason, initiator="auto", **extra):
         entry = self.store.log({"prev": self.detector.state, "new": self.detector.state, "event": event,
@@ -1174,6 +1245,9 @@ class App(MainWindow):
             self.root.focus_force()
         except tk.TclError:
             pass
+        pending, self.pending_update = getattr(self, "pending_update", None), None
+        if pending is not None:
+            self.root.after(400, lambda: self._update_checked(pending, "", True))
 
     def start_tray(self):
         if not tray_mod.available():
@@ -1189,6 +1263,8 @@ class App(MainWindow):
             self.tray = None
 
     def quit_app(self):
+        if getattr(self, "player", None) is not None:
+            self.player.close()
         if self.tray is not None:
             self.tray.stop()
             self.tray = None

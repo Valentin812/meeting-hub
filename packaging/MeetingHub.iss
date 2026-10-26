@@ -1,5 +1,5 @@
 ; Установщик Meeting Hub (Inno Setup 6).
-; Сборка: ISCC /DAppVer=7.1.0 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
+; Сборка: ISCC /DAppVer=7.2.0 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
 ; Ставится без прав администратора в %LOCALAPPDATA%\Programs\Meeting Hub.
 ; Данные пользователя лежат отдельно в %LOCALAPPDATA%\Meeting Hub и при удалении программы сохраняются.
 
@@ -60,11 +60,18 @@ Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"; Tasks: desk
 
 [Run]
 Filename: "{app}\MeetingHub.exe"; Description: "Запустить Meeting Hub"; Flags: nowait postinstall skipifsilent
+; Обновление из программы: тихая установка с /launch=1 сама запускает новую версию.
+Filename: "{app}\MeetingHub.exe"; Flags: nowait; Check: LaunchAfterSilentUpdate
 
 [Messages]
 ru.FinishedLabel=Meeting Hub установлен.%n%nПри первом запуске откроется мастер настройки: он проверит запись и перенесёт данные из прежней версии, если она была.%n%nЕсли на компьютере Kaspersky — мастер подскажет, как разрешить программе запись.
 
 [Code]
+function LaunchAfterSilentUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:launch|0}') = '1');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   { Тихое удаление (/VERYSILENT) не должно ждать нажатия кнопки. }

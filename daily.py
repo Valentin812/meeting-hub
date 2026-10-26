@@ -137,7 +137,7 @@ def installer_url(release):
 
 
 def check_update(current, timeout=8, fetch=None):
-    """(новая версия, ссылка) или None. fetch — для тестов."""
+    """(новая версия, установщик {name,url,size,digest} или None, страница релиза) или None."""
     if fetch is None:
         def fetch():
             req = urllib.request.Request(RELEASES_URL, headers={"Accept": "application/vnd.github+json",
@@ -146,7 +146,8 @@ def check_update(current, timeout=8, fetch=None):
                 return json.loads(r.read().decode("utf-8"))
     best = newest_release(fetch())
     if best and parse_version(best["tag_name"]) > parse_version(current):
-        return best["tag_name"].lstrip("v"), installer_url(best), best.get("html_url")
+        import updater
+        return best["tag_name"].lstrip("v"), updater.installer_asset(best), best.get("html_url")
     return None
 
 
