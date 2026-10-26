@@ -15,6 +15,11 @@ import report  # noqa: E402
 import transcriber as tr  # noqa: E402
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
+try:
+    import av  # noqa: F401
+    HAVE_DECODER = True
+except ImportError:
+    HAVE_DECODER = HAVE_FFMPEG
 
 
 def make_wav(path, seconds=3, rate=44100, channels=2):
@@ -85,6 +90,7 @@ class ImporterTests(unittest.TestCase):
             importer.import_file(src, self.out)
         self.assertFalse(list(self.out.glob("*.wav")))
 
+    @unittest.skipUnless(HAVE_DECODER, "нужен декодер звука")
     def test_same_second_files_do_not_clash(self):
         a = self.tmp / "a.wav"
         make_wav(a, rate=16000, channels=1)
@@ -92,6 +98,7 @@ class ImporterTests(unittest.TestCase):
         w2 = importer.import_file(a, self.out)
         self.assertNotEqual(w1, w2)
 
+    @unittest.skipUnless(HAVE_DECODER, "нужен декодер звука")
     def test_write_meta_keeps_other_fields_and_is_used_by_protocol(self):
         a = self.tmp / "a.wav"
         make_wav(a, rate=16000, channels=1)
@@ -102,6 +109,7 @@ class ImporterTests(unittest.TestCase):
         self.assertIn("Новое имя", html)
         self.assertIn("О планах", html)
 
+    @unittest.skipUnless(HAVE_DECODER, "нужен декодер звука")
     def test_imported_speakers_are_neutral(self):
         a = self.tmp / "a.wav"
         make_wav(a, rate=16000, channels=1)
