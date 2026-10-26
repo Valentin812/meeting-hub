@@ -37,12 +37,14 @@ import win_signals
 import recorder as rec_mod
 import transcriber as tr_mod
 import report as report_mod
+import daily
+import tray as tray_mod
 from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, BROWSERS, MEETING_APPS,
                               IDLE, ASKING, COUNTDOWN, IN_MEETING, ENDING,
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "6.0.1"
+APP_VERSION = "6.1.0"
 
 import support
 from support import app_dir, data_dir
@@ -347,6 +349,7 @@ class App:
         header = ttk.Frame(root, padding=10); header.pack(fill="x")
         ttk.Label(header, text="MEETING HUB", font=("Segoe UI", 18, "bold")).pack(side="left")
         ttk.Button(header, text="Открыть TXT", command=self.open_txt).pack(side="right")
+        ttk.Button(header, text="Настройки…", command=self.open_settings_dialog).pack(side="right", padx=(5, 15))
         ttk.Button(header, text="Сохранить проект", command=self.save_project).pack(side="right", padx=5)
         ttk.Button(header, text="Открыть проект", command=self.open_project).pack(side="right", padx=5)
 
@@ -420,6 +423,10 @@ class App:
             self._journal_note("Данные перенесены", "Из папки программы в профиль пользователя: " + ", ".join(imported))
         if not self.settings.get("first_run_done"):
             self.root.after(600, self.open_first_run)
+        self.tray = None
+        self.start_tray()
+        self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
+        self.root.after(20 * 1000, lambda: self.check_updates(manual=False))
         self._tick_job = self.root.after(800, self.tick)
         threading.Thread(target=self._recover_recordings, daemon=True).start()
 
@@ -552,6 +559,8 @@ class App:
             parts.append("ИИ: доступен")
         try:
             self.status.config(text=" · ".join(parts))
+            if self.tray is not None:
+                self.tray.update("Meeting Hub · " + " · ".join(parts[:2]))
             obs = self.last_obs
             mic = "микрофон: нет данных" if obs is None or obs.mic is None else (
                 "микрофон занят: " + ", ".join(sorted(obs.mic)) if obs.mic else "микрофон свободен")
@@ -592,11 +601,10 @@ class App:
     # ------------------------------------------------------------------
     def transcribe_queue(self):
         if getattr(self, "tq", None) is None:
-            size = self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL)
             folder = self.data_dir / "models"
 
             def factory():
-                return tr_mod.LocalWhisper(folder, size=size)
+                return tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
 
             self.tq = tr_mod.TranscriptionQueue(
                 factory, language=self.settings.get("language", "ru"), log=self.log,
@@ -851,6 +859,163 @@ class App:
             return "готова, есть итоги" if self.summary_path(wav).exists() else "готова"
         return ""
 
+    # ------------------------------------------------------------------
+    # Повседневная работа: настройки, хранение, обновления
+    # ------------------------------------------------------------------
+    KEEP_CHOICES = [("7 дней", 7), ("14 дней", 14), ("30 дней", 30), ("90 дней", 90), ("всегда", 0)]
+
+    def open_settings_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("Meeting Hub — настройки")
+        win.transient(self.root)
+        win.resizable(False, False)
+        box = ttk.Frame(win, padding=16)
+        box.pack(fill="both", expand=True)
+
+        auto = tk.BooleanVar(value=daily.autostart_enabled())
+        tray_var = tk.BooleanVar(value=bool(self.settings.get("close_to_tray", True)))
+        upd = tk.BooleanVar(value=bool(self.settings.get("check_updates", True)))
+        keep_labels = [k for k, _ in self.KEEP_CHOICES]
+        keep_now = int(self.settings.get("keep_audio_days", 30))
+        keep = tk.StringVar(value=next((k for k, v in self.KEEP_CHOICES if v == keep_now), "30 дней"))
+        model = tk.StringVar(value=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
+        lang = tk.StringVar(value=self.settings.get("language", "ru"))
+
+        row = 0
+        ttk.Label(box, text="Работа в фоне", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w"); row += 1
+        cb = ttk.Checkbutton(box, text="Запускать вместе с Windows (свёрнутой)", variable=auto)
+        cb.grid(row=row, column=0, columnspan=2, sticky="w"); row += 1
+        if not daily.autostart_supported():
+            cb.state(["disabled"])
+            ttk.Label(box, text="Доступно в установленной программе (MeetingHub.exe).",
+                      foreground="gray").grid(row=row, column=0, columnspan=2, sticky="w"); row += 1
+        cb2 = ttk.Checkbutton(box, text="Крестик окна сворачивает в значок у часов", variable=tray_var)
+        cb2.grid(row=row, column=0, columnspan=2, sticky="w"); row += 1
+        if self.tray is None:
+            cb2.state(["disabled"])
+
+        ttk.Label(box, text="Записи", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(12, 0)); row += 1
+        ttk.Label(box, text="Хранить аудио").grid(row=row, column=0, sticky="w")
+        ttk.Combobox(box, textvariable=keep, values=keep_labels, state="readonly", width=12).grid(row=row, column=1, sticky="w"); row += 1
+        ttk.Label(box, wraplength=420, foreground="gray", text=(
+            "Удаляется только аудио, у которого уже есть расшифровка. Тексты, итоги и протоколы хранятся всегда. "
+            "Час записи занимает около 220 МБ.")).grid(row=row, column=0, columnspan=2, sticky="w"); row += 1
+
+        ttk.Label(box, text="Расшифровка", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(12, 0)); row += 1
+        ttk.Label(box, text="Модель").grid(row=row, column=0, sticky="w")
+        ttk.Combobox(box, textvariable=model, values=list(tr_mod.MODELS), state="readonly", width=12).grid(row=row, column=1, sticky="w"); row += 1
+        hint = ttk.Label(box, wraplength=420, foreground="gray")
+        hint.grid(row=row, column=0, columnspan=2, sticky="w"); row += 1
+        model.trace_add("write", lambda *_: hint.config(text=tr_mod.MODELS.get(model.get(), "")))
+        hint.config(text=tr_mod.MODELS.get(model.get(), ""))
+        ttk.Label(box, text="Язык встреч").grid(row=row, column=0, sticky="w")
+        ttk.Combobox(box, textvariable=lang, values=["ru", "en", "auto"], state="readonly", width=12).grid(row=row, column=1, sticky="w"); row += 1
+
+        ttk.Label(box, text="Обновления", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", pady=(12, 0)); row += 1
+        ttk.Checkbutton(box, text="Проверять обновления при запуске", variable=upd).grid(row=row, column=0, sticky="w")
+        ttk.Button(box, text="Проверить сейчас", command=lambda: self.check_updates(manual=True)).grid(row=row, column=1, sticky="w"); row += 1
+        ttk.Label(box, foreground="gray", text=f"Версия {APP_VERSION} · данные: {self.data_dir}",
+                  wraplength=420).grid(row=row, column=0, columnspan=2, sticky="w", pady=(12, 0)); row += 1
+
+        def save():
+            if daily.autostart_supported() and auto.get() != daily.autostart_enabled():
+                try:
+                    daily.set_autostart(auto.get())
+                except OSError as e:
+                    messagebox.showerror("Автозапуск", f"Не удалось изменить автозапуск: {e}", parent=win)
+            old_model, old_lang = self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL), self.settings.get("language", "ru")
+            self.settings.update(close_to_tray=bool(tray_var.get()), check_updates=bool(upd.get()),
+                                 keep_audio_days=dict(self.KEEP_CHOICES)[keep.get()],
+                                 whisper_model=model.get(), language=lang.get())
+            self.save_settings()
+            tq = getattr(self, "tq", None)
+            if tq is not None:
+                tq.language = None if lang.get() == "auto" else lang.get()
+                if (old_model != model.get() or old_lang != lang.get()) and not tq.busy():
+                    tq.engine = None                      # новая модель загрузится при следующей расшифровке
+            self.last_event_text = "Настройки сохранены."
+            self.refresh_status()
+            win.destroy()
+        bar = ttk.Frame(box); bar.grid(row=row, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        ttk.Button(bar, text="Сохранить", command=save).pack(side="left")
+        ttk.Button(bar, text="Отмена", command=win.destroy).pack(side="left", padx=(6, 0))
+
+    def housekeeping(self):
+        """Раз в сутки: удалить старое аудио, у которого есть расшифровка."""
+        days = int(self.settings.get("keep_audio_days", 30))
+        protect = []                                      # идущая запись — .part.wav и без расшифровки, её не трогаем
+        tq = getattr(self, "tq", None)
+        if tq is not None:
+            protect += [k for k, st in tq.status.items() if st["state"] not in ("done", "error", "cancelled")]
+
+        def work():
+            try:
+                removed, freed = daily.audio_cleanup(self.rec_folder, days, protect=protect)
+            except Exception:
+                self.log.exception("Очистка записей")
+                return
+            if removed:
+                self._ui_calls.put((self._cleaned, (len(removed), freed, days)))
+        threading.Thread(target=work, name="housekeeping", daemon=True).start()
+        try:
+            self.root.after(24 * 3600 * 1000, self.housekeeping)
+        except tk.TclError:
+            pass
+
+    def _cleaned(self, count, freed, days):
+        self._journal_note("Старое аудио удалено", f"Записей: {count}, освобождено {freed / 1048576:.0f} МБ; "
+                           f"срок хранения {days} дн., тексты и протоколы сохранены", "auto")
+        self.refresh_records()
+
+    def check_updates(self, manual=False):
+        if not manual and not self.settings.get("check_updates", True):
+            return
+
+        def work():
+            try:
+                found, error = daily.check_update(APP_VERSION), ""
+            except Exception as e:
+                found, error = None, str(e)
+            self._ui_calls.put((self._update_checked, (found, error, manual)))
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+        if not manual:
+            try:
+                self.root.after(24 * 3600 * 1000, lambda: self.check_updates(manual=False))
+            except tk.TclError:
+                pass
+
+    def _update_checked(self, found, error, manual):
+        if found is None:
+            if manual:
+                messagebox.showinfo("Обновления", f"Не удалось проверить: {error}" if error else
+                                    f"Установлена последняя версия ({APP_VERSION}).")
+            return
+        version, url, page = found
+        if self.settings.get("skip_version") == version and not manual:
+            return
+        self.last_event_text = f"Доступна новая версия {version}"
+        self.refresh_status()
+        try:
+            hidden = self.root.state() in ("withdrawn", "iconic")
+        except tk.TclError:
+            return
+        if hidden and not manual:
+            # Не показываем диалог поверх работы: только уведомление у часов.
+            if self.tray is not None:
+                self.tray.notify(f"Доступна версия {version}. Настройки → «Проверить сейчас», чтобы обновиться.")
+            return
+        answer = messagebox.askyesnocancel(
+            "Доступно обновление",
+            f"Вышла версия Meeting Hub {version} (у вас {APP_VERSION}).\n\n"
+            "«Да» — скачать установщик (запустите его, данные сохранятся).\n"
+            "«Нет» — напомнить позже. «Отмена» — пропустить эту версию.")
+        if answer:
+            import webbrowser
+            webbrowser.open(url or page)
+        elif answer is None:
+            self.settings["skip_version"] = version
+            self.save_settings()
+
     def toggle_record_setting(self):
         self.settings["record_meetings"] = bool(self.record_meetings.get())
         self.save_settings()
@@ -873,6 +1038,7 @@ class App:
     def ensure_recording_consent(self):
         if self.settings.get("recording_consent"):
             return True
+        self.show_window()
         ok = messagebox.askyesno(
             "Запись встреч",
             "Meeting Hub записывает ваш голос и голоса собеседников в файл на этом компьютере.\n\n"
@@ -1016,6 +1182,21 @@ class App:
         ttk.Label(self.tab_records, text=info, wraplength=1200, justify="left").pack(anchor="w", pady=(0, 8))
         cols = [("when", "Дата и время", 150), ("duration", "Длительность", 100), ("meeting", "Встреча", 300),
                 ("size", "Размер", 90), ("tr", "Расшифровка", 170), ("note", "Примечание", 360)]
+        sbar = ttk.Frame(self.tab_records); sbar.pack(fill="x", pady=(0, 6))
+        ttk.Label(sbar, text="Поиск по встречам:").pack(side="left")
+        self.search_var = tk.StringVar()
+        ent = ttk.Entry(sbar, textvariable=self.search_var, width=50)
+        ent.pack(side="left", padx=6)
+        ttk.Button(sbar, text="×", width=3, command=lambda: self.search_var.set("")).pack(side="left")
+        self.search_info = ttk.Label(sbar, text="", foreground="gray")
+        self.search_info.pack(side="left", padx=10)
+        self._search_job = None
+
+        def on_search(*_):
+            if self._search_job is not None:
+                self.root.after_cancel(self._search_job)
+            self._search_job = self.root.after(300, self.refresh_records)
+        self.search_var.trace_add("write", on_search)
         self.records_tree = ttk.Treeview(self.tab_records, columns=[c[0] for c in cols], show="headings", height=16)
         for col, label, width in cols:
             self.records_tree.heading(col, text=label)
@@ -1042,10 +1223,17 @@ class App:
     def refresh_records(self):
         if not hasattr(self, "records_tree"):
             return
+        self._search_job = None
         selected = self.records_tree.selection()
         self.records_tree.delete(*self.records_tree.get_children())
+        query = self.search_var.get().strip() if hasattr(self, "search_var") else ""
+        hits = daily.search(self.rec_folder, query) if query else None
+        shown = 0
         for item in rec_mod.list_recordings(self.rec_folder):
             stem = item["path"].stem
+            if hits is not None and stem not in hits:
+                continue
+            shown += 1
             when = f"{stem[6:8]}.{stem[4:6]}.{stem[0:4]} {stem[9:11]}:{stem[11:13]}" if len(stem) >= 13 else stem
             dur = int(item.get("duration_sec") or 0)
             meeting = item.get("meeting") or ""
@@ -1056,9 +1244,13 @@ class App:
                 notes.insert(0, "восстановлена после сбоя")
             if item.get("trimmed_sec", 0) >= 1:
                 notes.append(f"убрано {int(item['trimmed_sec'])} с после встречи")
+            if item.get("audio_deleted"):
+                notes.insert(0, "аудио удалено по сроку хранения")
             self.records_tree.insert("", "end", iid=str(item["path"]), values=(
                 when, f"{dur // 3600}:{dur % 3600 // 60:02d}:{dur % 60:02d}", meeting,
-                f"{item['size'] / (1024 * 1024):.1f} МБ", self.transcript_state_text(item["path"]), "; ".join(notes)))
+                f"{item['size'] / (1024 * 1024):.1f} МБ" if item["size"] else "—", self.transcript_state_text(item["path"]), "; ".join(notes)))
+        if hasattr(self, "search_info"):
+            self.search_info.config(text=f"найдено: {shown}" if query else "")
         keep = [i for i in selected if self.records_tree.exists(i)]
         if keep:
             self.records_tree.selection_set(keep)
@@ -1150,6 +1342,12 @@ class App:
         sel = self.records_tree.selection()
         if not sel:
             messagebox.showinfo("Записи", "Сначала выберите запись.")
+            return
+        if not Path(sel[0]).exists():
+            if report_mod.protocol_paths(sel[0])[0].exists():
+                self.open_path(report_mod.protocol_paths(sel[0])[0])
+            else:
+                messagebox.showinfo("Записи", "Аудио этой встречи удалено по сроку хранения; текст сохранён.")
             return
         try:
             os.startfile(sel[0])  # type: ignore[attr-defined]
@@ -1430,6 +1628,42 @@ class App:
         return tree
 
     def on_close(self):
+        """Крестик окна: в фоне продолжаем замечать и записывать встречи (значок в трее)."""
+        if self.tray is not None and self.settings.get("close_to_tray", True):
+            self.root.withdraw()
+            if not self.settings.get("tray_hint_shown"):
+                self.settings["tray_hint_shown"] = True
+                self.save_settings()
+                self.tray.notify("Meeting Hub работает в фоне и продолжает замечать встречи. "
+                                 "Открыть или выйти — через значок у часов.")
+            return
+        self.quit_app()
+
+    def show_window(self):
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except tk.TclError:
+            pass
+
+    def start_tray(self):
+        if not tray_mod.available():
+            return
+        put = self._ui_calls.put
+        try:
+            self.tray = tray_mod.Tray(on_open=lambda: put((self.show_window, ())),
+                                      on_record=lambda: put((self.toggle_recording_button, ())),
+                                      on_quit=lambda: put((self.quit_app, ())),
+                                      is_recording=lambda: self.recorder is not None).start()
+        except Exception:
+            self.log.exception("Значок в трее не запущен")
+            self.tray = None
+
+    def quit_app(self):
+        if self.tray is not None:
+            self.tray.stop()
+            self.tray = None
         try:
             if self._tick_job is not None:
                 self.root.after_cancel(self._tick_job)
@@ -1677,7 +1911,12 @@ def main():
         cli_record(float(args[1]) if len(args) > 1 else 3.0)
         return
     root = tk.Tk()
-    App(root)
+    app = App(root)
+    if "--minimized" in args and app.settings.get("first_run_done"):
+        if app.tray is not None:
+            root.withdraw()
+        else:
+            root.iconify()
     root.mainloop()
 
 

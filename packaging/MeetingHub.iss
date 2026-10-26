@@ -1,5 +1,5 @@
 ; Установщик Meeting Hub (Inno Setup 6).
-; Сборка: ISCC /DAppVer=6.0.1 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
+; Сборка: ISCC /DAppVer=6.1.0 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
 ; Ставится без прав администратора в %LOCALAPPDATA%\Programs\Meeting Hub.
 ; Данные пользователя лежат отдельно в %LOCALAPPDATA%\Meeting Hub и при удалении программы сохраняются.
 
@@ -37,6 +37,11 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"
+Name: "autostart"; Description: "Запускать Meeting Hub вместе с Windows (в фоне, значок у часов) — иначе встречи не записываются, пока программа закрыта"; GroupDescription: "Работа в фоне:"
+
+[Registry]
+; То же значение меняет галочка «Запускать вместе с Windows» в настройках программы (daily.py, RUN_NAME).
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Meeting Hub"; ValueData: """{app}\MeetingHub.exe"" --minimized"; Flags: uninsdeletevalue; Tasks: autostart
 
 [InstallDelete]
 ; При обновлении убираем библиотеки прошлой версии, чтобы не смешивались.

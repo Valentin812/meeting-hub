@@ -672,14 +672,23 @@ def list_recordings(folder):
     items = []
     if not folder.exists():
         return items
-    for wav in folder.glob("*.wav"):
-        if wav.name.endswith(".part.wav"):
-            continue
+    wavs = [w for w in folder.glob("*.wav") if not w.name.endswith(".part.wav")]
+    have = {w.stem for w in wavs}
+    # Аудио удалено по сроку хранения, а расшифровка осталась — встреча остаётся в списке.
+    for tj in folder.glob("*.transcript.json"):
+        stem = tj.name[:-len(".transcript.json")]
+        if stem not in have:
+            wavs.append(folder / (stem + ".wav"))
+    for wav in wavs:
         meta = {}
         try:
             meta = json.loads(wav.with_suffix(".json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
+        if not wav.exists():
+            items.append({"path": wav, "size": 0, "duration_sec": meta.get("duration_sec", 0), **meta,
+                          "audio_deleted": True})
+            continue
         if "duration_sec" not in meta:
             try:
                 with wave.open(str(wav), "rb") as r:
