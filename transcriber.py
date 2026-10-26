@@ -210,6 +210,12 @@ def transcribe_file(wav, engine, language="ru", should_stop=None, progress=None,
         if progress is not None and total:
             progress(min(0.99, done / total))
     segments = merge(parts[0], parts[1])
+    if len(theirs) == 0:
+        # Одна дорожка (загруженный файл): кто говорит, неизвестно — не выдаём всё за «Вы».
+        import importer
+        if importer.is_imported(wav):
+            for s in segments:
+                s["speaker"] = importer.SPEAKER
     txt, js = output_paths(wav)
     meta = {"file": wav.name, "engine": getattr(engine, "name", "?"), "model": getattr(engine, "size", ""),
             "language": language, "duration_sec": round(duration, 1),

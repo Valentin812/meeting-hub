@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.2.2"
+APP_VERSION = "7.3.0"
 
 import support
 from support import app_dir, data_dir
@@ -1333,6 +1333,13 @@ class App(MainWindow):
             self._journal_note("Ошибка итогов", f"{wav.name}: {e}", "auto")
             self.root.after(100, self._next_summary)
             return
+        try:
+            meta = json.loads(Path(wav).with_suffix(".json").read_text(encoding="utf-8"))
+            context = ", ".join(x for x in (meta.get("title"), meta.get("description")) if x)
+            if context:
+                text = f"Тема встречи: {context}\n\n" + text
+        except (OSError, ValueError):
+            pass
         self.analysis_source = wav
         self.start_analysis(text, self.settings.get("ollama_model") or DEFAULT_MODEL, automatic=automatic)
 
@@ -1444,6 +1451,17 @@ def cli_transcribe(path, size, language):
     return txt
 
 
+def cli_import(path, size, language):
+    """MeetingHub.exe --import FILE [модель] [язык]: добавить аудио/видео как запись и расшифровать (для проверки)."""
+    import importer
+    wav = importer.import_file(path, data_dir() / "recordings", description="проверка импорта")
+    eng = tr_mod.LocalWhisper(data_dir() / "models", size=size)
+    txt = tr_mod.transcribe_file(wav, eng, language)
+    report_mod.write_protocol(wav)
+    (data_dir() / "import_test.json").write_text(
+        json.dumps({"wav": wav.name, "text": txt.read_text(encoding="utf-8")}, ensure_ascii=False), encoding="utf-8")
+
+
 def cli_play_test(seconds=1.5):
     """MeetingHub.exe --play-test: проиграть тон внутри программы и записать, каким способом вышел звук."""
     import wave
@@ -1475,6 +1493,9 @@ def main():
     args = sys.argv[1:]
     if args[:1] == ["--play-test"]:
         cli_play_test()
+        return
+    if args[:1] == ["--import"] and len(args) > 1:
+        cli_import(args[1], args[2] if len(args) > 2 else tr_mod.DEFAULT_MODEL, args[3] if len(args) > 3 else "ru")
         return
     if args[:1] == ["--transcribe"] and len(args) > 1:
         cli_transcribe(args[1], args[2] if len(args) > 2 else tr_mod.DEFAULT_MODEL,

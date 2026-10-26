@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import re
+import threading
 import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from tkinter import ttk, filedialog, messagebox
 
 import daily
 import recorder as rec_mod
+import importer
 import report as report_mod
 import theme
 import transcriber as tr_mod
@@ -71,7 +73,7 @@ def dur_text(sec):
 
 
 def meeting_title(item):
-    title = (item.get("window") or item.get("meeting") or "").strip()
+    title = (item.get("title") or item.get("window") or item.get("meeting") or "").strip()
     return title or "Запись без названия"
 
 
@@ -125,9 +127,13 @@ class MainWindow:
         # Слева — встречи
         left = ttk.Frame(body, padding=(12, 12, 6, 12), width=400)
         body.add(left, weight=0)
+        top = ttk.Frame(left)
+        top.pack(fill="x", pady=(0, 8))
+        self.add_btn = ttk.Button(top, text="＋ Файл", command=self.add_files)
+        self.add_btn.pack(side="right", padx=(6, 0))
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(left, textvariable=self.search_var)
-        self.search_entry.pack(fill="x", pady=(0, 8))
+        self.search_entry = ttk.Entry(top, textvariable=self.search_var)
+        self.search_entry.pack(side="left", fill="x", expand=True)
         self._search_placeholder(True)
         self.search_entry.bind("<FocusIn>", lambda _e: self._search_placeholder(False))
         self.search_entry.bind("<FocusOut>", lambda _e: self._search_placeholder(True))
@@ -149,10 +155,14 @@ class MainWindow:
         self.d_title.pack(anchor="w", fill="x")
         self.d_meta = ttk.Label(head, text="", style="Muted.TLabel", justify="left")
         self.d_meta.pack(anchor="w", fill="x", pady=(2, 0))
+        self.d_desc = ttk.Label(head, text="", justify="left")
+        self.d_desc.pack(anchor="w", fill="x", pady=(4, 0))
         btns = ttk.Frame(head)
         btns.pack(anchor="w", pady=(10, 0))
         self.proto_btn = ttk.Button(btns, text="Протокол (Word)", command=self.open_protocol)
         self.proto_btn.pack(side="left")
+        self.edit_btn = ttk.Button(btns, text="✎ Название", command=lambda: self.edit_details(self.selected))
+        self.edit_btn.pack(side="left", padx=(6, 0))
         self.more_btn = ttk.Menubutton(btns, text="Ещё", width=6)
         self.more_btn.pack(side="left", padx=(6, 0))
         self.more_menu = tk.Menu(self.more_btn, tearoff=False)
@@ -178,7 +188,7 @@ class MainWindow:
         self._segments = []
 
         def rewrap(event):
-            for lbl in (self.d_title, self.d_meta):
+            for lbl in (self.d_title, self.d_meta, self.d_desc):
                 lbl.configure(wraplength=max(200, event.width - 8))
         head.bind("<Configure>", rewrap)
 
@@ -373,6 +383,12 @@ class MainWindow:
         if meta.get("audio_deleted") or not wav.exists():
             parts.append("аудио удалено")
         self.d_meta.config(text=" · ".join(parts))
+        desc = (meta.get("description") or "").strip()
+        self.d_desc.config(text=desc)
+        if desc:
+            self.d_desc.pack(anchor="w", fill="x", pady=(4, 0))
+        else:
+            self.d_desc.pack_forget()
         self._player_show(wav, meta)
         self.proto_btn.state(["!disabled"] if tr_mod.has_transcript(wav) or self.summary_path(wav).exists()
                              else ["disabled"])
@@ -430,6 +446,7 @@ class MainWindow:
         m = self.more_menu
         m.delete(0, "end")
         has_text = tr_mod.has_transcript(wav)
+        m.add_command(label="Изменить название и описание…", command=lambda: self.edit_details(wav))
         if has_text:
             m.add_command(label="Подготовить итоги заново", command=lambda: self.request_summary(wav, rerun=True))
         if wav.exists():
@@ -741,6 +758,123 @@ class MainWindow:
                            "user")
         self.selected = None
         self.refresh_records()
+
+    # ------------------------------------------------------------------
+    # Свои файлы, название и описание
+    # ------------------------------------------------------------------
+    def add_files(self, paths=None):
+        paths = list(paths or filedialog.askopenfilenames(
+            parent=self.root, title="Добавить аудио или видео встречи", filetypes=importer.filetypes()))
+        if not paths:
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Добавляю файл")
+        win.transient(self.root)
+        win.resizable(False, False)
+        frm = ttk.Frame(win, padding=18)
+        frm.pack(fill="both", expand=True)
+        label = ttk.Label(frm, text="", width=56)
+        label.pack(anchor="w")
+        bar = ttk.Progressbar(frm, maximum=100, length=420)
+        bar.pack(fill="x", pady=(10, 4))
+        ttk.Label(frm, text="Из видео берётся только звук. Исходный файл не меняется.",
+                  style="Small.TLabel").pack(anchor="w")
+        stop = threading.Event()
+        ttk.Button(frm, text="Отмена", command=stop.set).pack(anchor="e", pady=(10, 0))
+        win.protocol("WM_DELETE_WINDOW", stop.set)
+        results, errors = [], []
+
+        def should_stop():
+            if stop.is_set():
+                raise importer.Cancelled()
+
+        def ui(fn, *a):
+            self._ui_calls.put((fn, a))
+
+        def show(i, name, frac):
+            try:
+                label.config(text=f"Файл {i} из {len(paths)}: {name}")
+                bar["value"] = int(frac * 100)
+            except tk.TclError:
+                pass
+
+        def finish():
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+            for wav in results:
+                self._journal_note("Файл добавлен", wav.name, "user", file=wav.name)
+            if errors:
+                messagebox.showwarning("Добавить файл", "\n".join(errors), parent=self.root)
+            self.refresh_records()
+            if results:
+                self.records_tree.select(str(results[-1]), notify=True)
+                if self.auto_transcribe.get():
+                    self.transcribe_files(results)
+                if len(results) == 1:
+                    self.root.after(300, lambda: self.edit_details(results[0]))
+
+        def worker():
+            for i, src in enumerate(paths, 1):
+                name = Path(src).name
+                ui(show, i, name, 0.0)
+                try:
+                    wav = importer.import_file(src, self.rec_folder,
+                                               progress=lambda f, i=i, n=name: ui(show, i, n, f),
+                                               should_stop=should_stop)
+                    results.append(wav)
+                except importer.Cancelled:
+                    break
+                except importer.ImportFailed as e:
+                    errors.append(f"{name}: {e}")
+                except Exception as e:
+                    self.log.exception("Файл не добавлен")
+                    errors.append(f"{name}: {e}")
+            ui(finish)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def edit_details(self, wav):
+        if not wav:
+            return
+        wav = Path(wav)
+        meta = read_json(wav.with_suffix(".json")) or {}
+        win = tk.Toplevel(self.root)
+        win.title("Название и описание")
+        win.transient(self.root)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=18)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Название").pack(anchor="w")
+        title = tk.StringVar(value=meeting_title({"path": wav, **meta}))
+        entry = ttk.Entry(frm, textvariable=title, width=60)
+        entry.pack(fill="x", pady=(2, 10))
+        ttk.Label(frm, text="Описание (необязательно): о чём встреча, участники, проект").pack(anchor="w")
+        desc = tk.Text(frm, width=60, height=5, wrap="word", font=(theme.FONT, 10))
+        desc.pack(fill="x", pady=(2, 0))
+        desc.insert("1.0", meta.get("description") or "")
+        ttk.Label(frm, text="Описание попадёт в протокол и подскажет программе, о чём встреча.",
+                  style="Small.TLabel").pack(anchor="w", pady=(4, 0))
+
+        def save():
+            fields = {"title": title.get().strip(), "description": desc.get("1.0", "end").strip()}
+            win.destroy()
+            importer.write_meta(wav, fields)
+            for ext in (".protocol.html", ".protocol.docx"):
+                if wav.with_name(wav.stem + ext).exists():
+                    self.make_protocol(wav)
+                    break
+            self.refresh_records()
+            self.show_meeting(wav, force=True)
+
+        row = ttk.Frame(frm)
+        row.pack(fill="x", pady=(14, 0))
+        ttk.Button(row, text="Сохранить", style="Accent.TButton", command=save).pack(side="right")
+        ttk.Button(row, text="Отмена", command=win.destroy).pack(side="right", padx=(0, 8))
+        win.bind("<Escape>", lambda _e: win.destroy())
+        entry.focus_set()
+        entry.select_range(0, "end")
 
     # ------------------------------------------------------------------
     # Статус вверху

@@ -43,7 +43,7 @@ def _dur(sec):
 
 def _title(wav, meta):
     # Заголовок окна конкретнее метки сервиса («Room … | MRM meet» вместо «Google Meet»).
-    return meta.get("window") or meta.get("meeting") or Path(wav).stem
+    return meta.get("title") or meta.get("window") or meta.get("meeting") or Path(wav).stem
 
 
 def _when(wav):
@@ -55,6 +55,8 @@ def _when(wav):
 
 def build_markdown(wav, meta, result, segments):
     lines = [f"# {_title(wav, meta)}", "", f"Дата: {_when(wav)} · Длительность: {_dur(meta.get('duration_sec'))}", ""]
+    if meta.get("description"):
+        lines += [str(meta["description"]), ""]
     if result:
         bullets = [f"- {x}" for x in result.get("summary") or []] or ["- не сформировано"]
         lines += ["## Резюме", *bullets, ""]
@@ -94,6 +96,8 @@ def build_html(wav, meta, result, segments):
     e = html.escape
     out = [f"<h1>{e(_title(wav, meta))}</h1>",
            f"<div class=meta>{e(_when(wav))} · длительность {e(_dur(meta.get('duration_sec')))}</div>"]
+    if meta.get("description"):
+        out.append(f"<p>{e(str(meta['description']))}</p>")
     if result:
         out.append("<h2>Резюме</h2><ul>" + "".join(f"<li>{e(str(x))}</li>" for x in result.get("summary") or [])
                    + "</ul>" if result.get("summary") else "<h2>Резюме</h2><p>Не сформировано.</p>")
@@ -173,6 +177,8 @@ def build_docx(wav, meta, result, segments, path):
     p = doc.add_paragraph()
     r = p.add_run(f"{_when(wav)} · длительность {_dur(meta.get('duration_sec'))}")
     r.font.color.rgb = muted
+    if meta.get("description"):
+        doc.add_paragraph(str(meta["description"]))
     if result:
         doc.add_paragraph("Резюме", style="Heading 1")
         for x in result.get("summary") or ["Не сформировано."]:

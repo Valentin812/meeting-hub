@@ -164,6 +164,22 @@ jobs:
           if ((Get-Content $proto -Encoding utf8 -Raw) -notmatch '(?i)transcription|friday|version') { throw "protocol has no transcript" }
           if (-not (Test-Path (Join-Path $env:RUNNER_TEMP "speech.protocol.docx"))) { throw "Word protocol was not created" }
 
+
+      - name: Test - installed app imports a video file (audio track) and transcribes it
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
+          $data = "$env:LOCALAPPDATA\Meeting Hub"
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
+          $wav = Join-Path $env:RUNNER_TEMP "speech.wav"
+          $mp4 = Join-Path $env:RUNNER_TEMP "Video meeting.mp4"
+          ffmpeg -v error -y -f lavfi -i "color=c=blue:s=160x120:d=12" -i $wav -shortest -pix_fmt yuv420p $mp4
+          if (-not (Test-Path $mp4)) { throw "test video was not created" }
+          Start-Process -FilePath $exe -ArgumentList "--import", "`"$mp4`"", "tiny", "en" -Wait
+          $j = Get-Content "$data\import_test.json" -Encoding utf8 -Raw
+          Write-Output "::notice title=import::$($j -replace '\s+',' ')"
+          if ($j -notmatch '(?i)transcription|friday|version') { throw "speech from video was not recognized: $j" }
       - name: Test - GUI starts, imports data of an old version placed next to the exe
         timeout-minutes: 5
         shell: pwsh
