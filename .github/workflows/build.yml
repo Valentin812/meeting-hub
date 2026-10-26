@@ -35,7 +35,7 @@ jobs:
           --hidden-import audio_check --hidden-import support --hidden-import pyaudiowpatch
           --collect-data soundcard
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
-          --hidden-import transcriber --hidden-import pystray._win32
+          --hidden-import transcriber --hidden-import pystray._win32 --collect-data sv_ttk
           app.py
 
       - name: Code signing certificate (optional)
@@ -165,12 +165,39 @@ jobs:
           if ($p.HasExited) { throw "MeetingHub.exe exited early with code $($p.ExitCode)" }
           $p.Refresh()
           Write-Output "::notice title=exe window::$($p.MainWindowTitle)"
-          if ($p.MainWindowTitle -notlike "Meeting Hub v*") { throw "main window not shown (error dialog?): '$($p.MainWindowTitle)'" }
+          if ($p.MainWindowTitle -notlike "Meeting Hub*") { throw "main window not shown (error dialog?): '$($p.MainWindowTitle)'" }
           Stop-Process -Id $p.Id
           if (-not (Test-Path "$data\meeting_hub.log")) { throw "no log in the user data folder" }
           if (-not (Test-Path "$data\meeting_hub_training.json")) { throw "old data was not imported" }
           if (-not (Get-ChildItem "$data\meeting_hub_training.v4-backup-*.json")) { throw "v4.9 data was not migrated" }
           Write-Output "::notice title=exe gui::started; old data imported into the profile and migrated"
+
+      - name: Screenshots of the main window (light and dark) with demo meetings
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
+          $data = "$env:LOCALAPPDATA\Meeting Hub"
+          New-Item -ItemType Directory -Force "$data\recordings" | Out-Null
+          Copy-Item tests\data\demo\* "$data\recordings\" -Force
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          New-Item -ItemType Directory -Force shots | Out-Null
+          foreach ($mode in "light", "dark") {
+            $settings = @{ first_run_done = $true; recording_consent = $true; theme = $mode; check_updates = $false; last_selected = "20261026_100500" } | ConvertTo-Json
+            [IO.File]::WriteAllText("$data\meeting_hub_settings.json", $settings, [Text.UTF8Encoding]::new($false))
+            $p = Start-Process -FilePath "$app\MeetingHub.exe" -PassThru
+            Start-Sleep -Seconds 10
+            if ($p.HasExited) { throw "exited: $($p.ExitCode)" }
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height
+            $g = [Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$PWD\shots\main-$mode.png")
+            $g.Dispose(); $bmp.Dispose()
+            Stop-Process -Id $p.Id
+            Start-Sleep -Seconds 2
+          }
+          Get-ChildItem shots | ForEach-Object { Write-Output "::notice title=screenshot::$($_.Name) $($_.Length) bytes" }
 
       - name: Test - autostart launch runs hidden in the tray and keeps running
         timeout-minutes: 3
@@ -216,3 +243,4 @@ jobs:
             gh release create $tag --prerelease --target $env:GITHUB_SHA --title "Meeting Hub $tag" --notes "MeetingHubSetup — установщик (рекомендуется). portable.zip — версия без установки. Подпись: $signed. Сборка из коммита $env:GITHUB_SHA."
           }
           gh release upload $tag $env:setup $env:portable --clobber
+          if (Test-Path shots) { gh release upload $tag (Get-ChildItem shots\*.png).FullName --clobber }

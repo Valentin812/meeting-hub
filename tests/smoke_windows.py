@@ -196,7 +196,7 @@ def check_ui():
 
     def finish_recording():
         app.refresh_status()
-        assert "ЗАПИСЬ" in app.status.cget("text"), app.status.cget("text")
+        assert "Запись" in app.status.cget("text"), app.status.cget("text")
         app.user_action("manual_end")
         assert app.recorder is None
         wait_saved()
@@ -207,8 +207,26 @@ def check_ui():
             root.after(200, wait_saved, n + 1)
             return
         assert not app._saving_threads, "запись не сохранилась"
-        rows = app.records_tree.get_children()
+        app.refresh_records()
+        rows = app.meeting_rows()
         assert len(rows) == 1, rows
+        # Новый интерфейс: карточка встречи, настройки, журнал открываются без ошибок.
+        root.update()
+        app.on_meeting_selected()
+        app.show_meeting(app.selected, force=True)
+        assert app.d_title.cget("text"), "пустой заголовок встречи"
+        app.open_settings_dialog()
+        root.update()
+        app.settings_win.destroy()
+        app.open_journal_window()
+        root.update()
+        app.journal_win.destroy()
+        root.update()
+        app.search_entry.focus_set()
+        app._search_placeholder(False)
+        app.search_var.set("нет такого")
+        app.refresh_records()
+        assert app.meeting_rows() == [], app.meeting_rows()
         seen.append("recorded")
         app.quit_app()
 
