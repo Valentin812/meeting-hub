@@ -439,6 +439,8 @@ class MainWindow:
             m.add_command(label="Открыть расшифровку (TXT)", command=lambda: self.open_path(tr_mod.output_paths(wav)[0]))
         if self.summary_path(wav).exists():
             m.add_command(label="Сохранить задачи в CSV…", command=lambda: self.export_tasks(wav))
+        if wav.exists():
+            m.add_command(label="Открыть аудио в другой программе", command=lambda: self.open_path(wav))
         m.add_command(label="Показать в папке", command=lambda: self.show_in_folder(wav))
         m.add_separator()
         m.add_command(label="Удалить встречу…", command=lambda: self.delete_meeting(wav))
@@ -593,10 +595,18 @@ class MainWindow:
         self._player_update()
 
     def _player_failed(self, wav, err):
-        self.log.warning("player failed: %s", err)
-        if messagebox.askyesno("Прослушивание", f"Не удалось воспроизвести запись в программе: {err}\n\n"
-                               "Открыть её в стандартном проигрывателе Windows?", parent=self.root):
-            self.open_path(wav)
+        """Без перехода в другие программы: причину показываем прямо под проигрывателем."""
+        self.log.warning("player failed for %s: %s", wav.name, err)
+        self._journal_note("Прослушивание не удалось", str(err)[:300], "user")
+        self.play_btn.config(text="▶")
+        self.p_note.config(text="Звук не воспроизводится: " + str(err)[:160]
+                           + ". Проверьте динамики; если стоит Kaspersky — добавьте Meeting Hub в доверенные.")
+        self.last_event_text = "Звук не воспроизводится — подробности в журнале"
+        self.refresh_status()
+        messagebox.showwarning("Прослушивание", "Не удалось воспроизвести запись.\n\n" + str(err)
+                               + "\n\nПроверьте, что динамики или наушники подключены и выбраны в Windows. "
+                               "Если на компьютере Kaspersky — добавьте Meeting Hub в доверенные программы.",
+                               parent=self.root)
 
     def _player_scale_moved(self, value):
         if self._p_drag and self.player is not None:

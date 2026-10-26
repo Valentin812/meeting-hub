@@ -19,7 +19,7 @@ class FakeOut:
         self.started = 0
         self.pull = None
 
-    def start(self, rate, pull):
+    def start(self, rate, pull, player=None):
         self.started += 1
         self.pull = pull
 
@@ -84,6 +84,39 @@ class PlayerTest(unittest.TestCase):
         self.assertEqual(self.p.position, 0.0)
         self.p.seek(99)
         self.assertAlmostEqual(self.p.position, 2.0)
+
+    def test_resampled_stereo_output(self):
+        self.p.load(self.wav)
+        data, more = self.p.pull_converted(4800, 48000, 2)       # 0,1 с при 48 кГц стерео
+        self.assertEqual(len(data), 4800 * 2 * 2)
+        self.assertTrue(more)
+        self.assertAlmostEqual(self.p.position, 0.1, places=2)
+
+    def test_falls_back_to_second_backend(self):
+        class Broken:
+            name = "broken"
+
+            def start(self, *a, **k):
+                raise RuntimeError("Kaspersky")
+
+            def close(self):
+                pass
+        p = player.Player(backends=[Broken, lambda: self.out])
+        p.load(self.wav)
+        p.play()
+        self.assertTrue(p.playing)
+        self.assertIs(p.backend, self.out)
+        self.assertIn("Kaspersky", p.errors[0])
+
+    def test_all_backends_fail(self):
+        class Broken:
+            def __init__(self):
+                raise RuntimeError("нет динамиков")
+        p = player.Player(backends=[Broken])
+        p.load(self.wav)
+        with self.assertRaises(player.PlayerError):
+            p.play()
+        self.assertFalse(p.playing)
 
     def test_nothing_loaded(self):
         with self.assertRaises(player.PlayerError):
