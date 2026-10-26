@@ -35,7 +35,7 @@ jobs:
           --hidden-import audio_check --hidden-import support --hidden-import pyaudiowpatch
           --collect-data soundcard
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
-          --hidden-import transcriber
+          --hidden-import transcriber --hidden-import pystray._win32
           app.py
 
       - name: Code signing certificate (optional)
@@ -105,6 +105,9 @@ jobs:
           if (-not (Test-Path $exe)) { Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 40; throw "not installed: $exe" }
           $lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter "Meeting Hub*.lnk"
           Write-Output "::notice title=installer::installed to $exe; start menu shortcuts: $($lnk.Count)"
+          $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue)."Meeting Hub"
+          if ($run -notmatch '--minimized') { throw "autostart was not registered: $run" }
+          Write-Output "::notice title=autostart::$run"
 
       - name: Test - installed app checks sound and records 4 s while a tone plays
         timeout-minutes: 5
@@ -160,11 +163,31 @@ jobs:
           while (-not (Test-Path "$data\meeting_hub.log") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
           Start-Sleep -Seconds 5
           if ($p.HasExited) { throw "MeetingHub.exe exited early with code $($p.ExitCode)" }
+          $p.Refresh()
+          Write-Output "::notice title=exe window::$($p.MainWindowTitle)"
+          if ($p.MainWindowTitle -notlike "Meeting Hub v*") { throw "main window not shown (error dialog?): '$($p.MainWindowTitle)'" }
           Stop-Process -Id $p.Id
           if (-not (Test-Path "$data\meeting_hub.log")) { throw "no log in the user data folder" }
           if (-not (Test-Path "$data\meeting_hub_training.json")) { throw "old data was not imported" }
           if (-not (Get-ChildItem "$data\meeting_hub_training.v4-backup-*.json")) { throw "v4.9 data was not migrated" }
           Write-Output "::notice title=exe gui::started; old data imported into the profile and migrated"
+
+      - name: Test - autostart launch runs hidden in the tray and keeps running
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
+          $log = "$env:LOCALAPPDATA\Meeting Hub\meeting_hub.log"
+          $before = if (Test-Path $log) { (Get-Content $log -Encoding utf8).Count } else { 0 }
+          $p = Start-Process -FilePath "$app\MeetingHub.exe" -ArgumentList "--minimized" -PassThru
+          Start-Sleep -Seconds 12
+          if ($p.HasExited) { throw "MeetingHub.exe --minimized exited with code $($p.ExitCode)" }
+          $p.Refresh()
+          if ($p.MainWindowTitle -like "*exception*" -or $p.MainWindowTitle -like "*error*") { throw "error dialog: $($p.MainWindowTitle)" }
+          $new = Get-Content $log -Encoding utf8 | Select-Object -Skip $before
+          if ($new -match "Traceback") { $new | Select-Object -Last 30; throw "traceback in the log" }
+          Write-Output "::notice title=minimized::running, main window handle=$($p.MainWindowHandle)"
+          Stop-Process -Id $p.Id
 
       - name: Test - upgrade over the installed version and uninstall keeps user data
         timeout-minutes: 5
@@ -178,6 +201,7 @@ jobs:
           if (Test-Path "$app\MeetingHub.exe") { throw "program not removed" }
           if (-not (Test-Path "$env:LOCALAPPDATA\Meeting Hub\meeting_hub_training.json")) { throw "user data lost on uninstall" }
           if (-not (Get-ChildItem "$env:LOCALAPPDATA\Meeting Hub\recordings\*.wav")) { throw "recordings lost on uninstall" }
+          if ((Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue)."Meeting Hub") { throw "autostart left after uninstall" }
           Write-Output "::notice title=installer upgrade/uninstall::program removed, user data kept"
 
       - name: Publish as GitHub pre-release

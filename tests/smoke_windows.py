@@ -210,7 +210,7 @@ def check_ui():
         rows = app.records_tree.get_children()
         assert len(rows) == 1, rows
         seen.append("recorded")
-        app.on_close()
+        app.quit_app()
 
     root.after(500, step)
     root.mainloop()

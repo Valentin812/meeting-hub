@@ -2,3 +2,5 @@ numpy>=2.1
 PyAudioWPatch>=0.2.12.9
 soundcard>=0.4.3
 faster-whisper>=1.1.0; python_version < "3.14"
+pystray>=0.19.5
+Pillow>=10.4
