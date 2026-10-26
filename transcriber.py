@@ -220,6 +220,8 @@ def transcribe_file(wav, engine, language="ru", should_stop=None, progress=None,
     meta = {"file": wav.name, "engine": getattr(engine, "name", "?"), "model": getattr(engine, "size", ""),
             "language": language, "duration_sec": round(duration, 1),
             "processing_sec": round(time.time() - started, 1), "segments": segments}
+    if getattr(engine, "fallback_reason", ""):
+        meta["fallback_reason"] = engine.fallback_reason
     tmp = js.with_name(js.name + ".tmp")
     tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, js)

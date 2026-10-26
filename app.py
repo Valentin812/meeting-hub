@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.3.0"
+APP_VERSION = "7.4.0"
 
 import support
 from support import app_dir, data_dir
@@ -497,12 +497,36 @@ class App(MainWindow):
             folder = self.data_dir / "models"
 
             def factory():
-                return tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
+                local = tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
+                if self.settings.get("salute_enabled") and (self.settings.get("salute_key") or "").strip():
+                    import salute
+                    client = salute.SaluteClient(self.settings["salute_key"], self.settings.get("salute_scope") or
+                                                 "SALUTE_SPEECH_PERS",
+                                                 verify_tls=not self.settings.get("salute_insecure", False))
+                    return salute.SaluteWithFallback(client, local, notify=self._salute_fallback)
+                return local
 
             self.tq = tr_mod.TranscriptionQueue(
                 factory, language=self.settings.get("language", "ru"), log=self.log,
                 on_done=lambda key, st: self._ui_calls.put((self._transcribed, (key, st))))
         return self.tq
+
+    def _salute_fallback(self, reason):
+        """Из потока расшифровки: SaluteSpeech не сработал, дальше — локальная модель."""
+        self._ui_calls.put((lambda: self._journal_note(
+            "SaluteSpeech недоступен", f"{reason}. Расшифровываю локальной моделью.", "auto"), ()))
+
+    def check_salute(self, key, scope, insecure, parent=None):
+        import salute
+
+        def worker():
+            try:
+                msg = salute.SaluteClient(key, scope, verify_tls=not insecure, timeout=20).check()
+                show = messagebox.showinfo
+            except Exception as e:
+                msg, show = f"Не получилось: {e}", messagebox.showwarning
+            self._ui_calls.put((lambda: show("SaluteSpeech", msg, parent=parent or self.root), ()))
+        threading.Thread(target=worker, daemon=True).start()
 
     def transcribe_files(self, paths, force=False):
         ok, why = tr_mod.LocalWhisper.available()

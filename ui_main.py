@@ -997,7 +997,7 @@ class MainWindow:
         win = self.settings_win = tk.Toplevel(self.root)
         win.title("Настройки")
         win.transient(self.root)
-        win.geometry("640x560")
+        win.geometry("660x640")
         win.minsize(560, 480)
         s = self.settings
         nb = ttk.Notebook(win)
@@ -1090,6 +1090,21 @@ class MainWindow:
             "Итоги готовит локальная модель Ollama — один раз запустите setup_ollama.bat из папки программы. "
             "Без неё в протоколе будет только расшифровка.")).pack(anchor="w")
 
+        ttk.Separator(p).pack(fill="x", pady=(14, 8))
+        s_on = tk.BooleanVar(value=bool(s.get("salute_enabled")))
+        s_key = tk.StringVar(value=s.get("salute_key", ""))
+        s_insecure = tk.BooleanVar(value=bool(s.get("salute_insecure", False)))
+        ttk.Checkbutton(p, text="Распознавать в облаке SaluteSpeech (Сбер)", variable=s_on).pack(anchor="w")
+        hint(p, "Если облако не отвечает или ключ не подходит, программа сама расшифрует локальной моделью. "
+                "Аудио уходит на серверы Сбера — включайте, только если это допустимо для ваших встреч.")
+        krow = ttk.Frame(p); krow.pack(fill="x", padx=(28, 0))
+        ttk.Label(krow, text="Ключ авторизации").pack(side="left")
+        ttk.Entry(krow, textvariable=s_key, show="•", width=34).pack(side="left", padx=8)
+        ttk.Button(krow, text="Проверить", command=lambda: self.check_salute(
+            s_key.get(), s.get("salute_scope") or "SALUTE_SPEECH_PERS", s_insecure.get(), win)).pack(side="left")
+        ttk.Checkbutton(p, text="Не проверять сертификат Сбера (если «Проверить» пишет про сертификат)",
+                        variable=s_insecure).pack(anchor="w", padx=(28, 0), pady=(8, 0))
+
         # 4. Хранение
         p = page("Хранение")
         keep_now = int(s.get("keep_audio_days", 0))
@@ -1146,14 +1161,20 @@ class MainWindow:
                 self.auto_detect.set(bool(detect.get()))
                 self.toggle_auto_detect()
             self.auto_pause.set(bool(pause.get()))
-            old = (s.get("whisper_model", tr_mod.DEFAULT_MODEL), s.get("language", "ru"))
+            old = (s.get("whisper_model", tr_mod.DEFAULT_MODEL), s.get("language", "ru"),
+                   bool(s.get("salute_enabled")), s.get("salute_key", ""), bool(s.get("salute_insecure")))
+            if s_on.get() and not s.get("salute_enabled") and not messagebox.askokcancel(
+                    "SaluteSpeech", "Записи встреч будут отправляться в облако Сбера для распознавания.\n\n"
+                    "Включить?", icon="warning", parent=win):
+                s_on.set(False)
             new_theme = dict(self.THEMES)[theme_var.get()]
             s.update(close_to_tray=bool(tray_var.get()), check_updates=bool(upd.get()),
                      keep_audio_days=dict(self.KEEP_CHOICES)[keep.get()], whisper_model=model.get(),
                      language=lang.get(), ollama_model=llm.get().strip() or self.default_llm,
                      record_meetings=self.record_meetings.get(), auto_transcribe=self.auto_transcribe.get(),
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
-                     auto_pause=self.auto_pause.get())
+                     auto_pause=self.auto_pause.get(), salute_enabled=bool(s_on.get()),
+                     salute_key=s_key.get().strip(), salute_insecure=bool(s_insecure.get()))
             theme_changed = new_theme != s.get("theme", "system")
             s["theme"] = new_theme
             if theme_changed:
@@ -1163,7 +1184,8 @@ class MainWindow:
             tq = getattr(self, "tq", None)
             if tq is not None:
                 tq.language = None if lang.get() == "auto" else lang.get()
-                if old != (model.get(), lang.get()) and not tq.busy():
+                if old != (model.get(), lang.get(), bool(s_on.get()), s_key.get().strip(),
+                           bool(s_insecure.get())) and not tq.busy():
                     tq.engine = None
             self.last_event_text = "Настройки сохранены."
             self.refresh_status()
