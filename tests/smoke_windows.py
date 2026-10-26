@@ -196,7 +196,7 @@ def check_ui():
 
     def finish_recording():
         app.refresh_status()
-        assert "Запись" in app.status.cget("text"), app.status.cget("text")
+        assert "Запись" in app.status.cget_text(), app.status.cget_text()
         app.user_action("manual_end")
         assert app.recorder is None
         wait_saved()
@@ -217,6 +217,9 @@ def check_ui():
         assert app.d_title.cget("text"), "пустой заголовок встречи"
         app.open_settings_dialog()
         root.update()
+        for mode in ("dark", "light"):              # смена оформления на лету
+            app.apply_theme(mode)
+            root.update()
         app.settings_win.destroy()
         app.open_journal_window()
         root.update()

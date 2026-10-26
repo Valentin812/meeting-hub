@@ -60,6 +60,22 @@ class Report(unittest.TestCase):
         self.assertIn("| Подготовить сборку | Иван | — |", md)
         self.assertIn("**Вы:** Привет", md)
 
+    @unittest.skipUnless(report.docx_available(), "нет python-docx")
+    def test_word_protocol(self):
+        import zipfile
+        self.put_transcript()
+        self.put_summary()
+        path = report.write_docx(self.wav)
+        self.assertEqual(path.name, "20261024_100000.protocol.docx")
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8")
+        for needle in ("Планёрка", "Выпускаем в пятницу", "Подготовить сборку", "Иван", "Кто тестирует?",
+                       "Привет &lt;всем&gt;"):
+            self.assertIn(needle, xml)
+
+    def test_word_protocol_nothing(self):
+        self.assertIsNone(report.write_docx(self.wav))
+
     def test_summary_without_transcript(self):
         self.put_summary()
         self.assertIsNotNone(report.write_protocol(self.wav))

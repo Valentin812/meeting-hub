@@ -17,6 +17,7 @@ import recorder as rec_mod
 import report as report_mod
 import theme
 import transcriber as tr_mod
+import widgets
 from meeting_detector import ASKING, COUNTDOWN, ENDING, IN_MEETING
 
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
@@ -75,12 +76,19 @@ class MainWindow:
         h = min(760, root.winfo_screenheight() - 90)
         root.geometry(f"{w}x{h}+{max(0, (root.winfo_screenwidth() - w) // 2)}+20")
 
+        self._icons = {"logo": widgets.app_icon(30), "window": widgets.app_icon(64)}
+        if self._icons["window"] is not None:
+            try:
+                root.iconphoto(True, self._icons["window"])
+            except tk.TclError:
+                pass
         header = ttk.Frame(root, padding=(18, 14, 18, 4))
         header.pack(fill="x")
+        if self._icons["logo"] is not None:
+            ttk.Label(header, image=self._icons["logo"]).pack(side="left", padx=(0, 10))
         ttk.Label(header, text="Meeting Hub", style="Title.TLabel").pack(side="left")
-        self.status = tk.Label(header, text="Запуск…", font=(theme.FONT, 10, "bold"), padx=12, pady=3,
-                               bd=0, highlightthickness=0)
-        self.status.pack(side="left", padx=(14, 0))
+        self.status = widgets.Pill(header, pal)
+        self.status.pack(side="left", padx=(16, 0))
         ttk.Button(header, text="⚙", width=3, command=self.open_settings_dialog).pack(side="right")
         self.rec_btn = ttk.Button(header, text="●  Записать", style="Accent.TButton",
                                   command=self.toggle_recording_button)
@@ -93,7 +101,7 @@ class MainWindow:
         body.pack(fill="both", expand=True)
 
         # Слева — встречи
-        left = ttk.Frame(body, padding=(12, 12, 6, 12), width=470)
+        left = ttk.Frame(body, padding=(12, 12, 6, 12), width=400)
         body.add(left, weight=0)
         self.search_var = tk.StringVar()
         self.search_entry = ttk.Entry(left, textvariable=self.search_var)
@@ -103,23 +111,9 @@ class MainWindow:
         self.search_entry.bind("<FocusOut>", lambda _e: self._search_placeholder(True))
         self._search_job = None
         self.search_var.trace_add("write", self._on_search)
-        listbox = ttk.Frame(left)
-        listbox.pack(fill="both", expand=True)
-        self.records_tree = ttk.Treeview(listbox, columns=("info", "state"), show="tree", selectmode="browse",
-                                         style="Meetings.Treeview")
-        self.records_tree.column("#0", width=250, minwidth=150, stretch=True)
-        self.records_tree.column("info", width=105, minwidth=90, anchor="e", stretch=False)
-        self.records_tree.column("state", width=92, minwidth=80, anchor="w", stretch=False)
-        for key in ("busy", "error"):
-            self.records_tree.tag_configure(key, foreground=pal["pill"]["busy" if key == "busy" else "rec"][1])
-        self.records_tree.tag_configure("audio", foreground=pal["muted"])
-        self.records_tree.tag_configure("day", foreground=pal["muted"], font=(theme.FONT, 9, "bold"))
-        sb = ttk.Scrollbar(listbox, orient="vertical", command=self.records_tree.yview)
-        self.records_tree.configure(yscrollcommand=sb.set)
-        self.records_tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        self.records_tree.bind("<<TreeviewSelect>>", lambda _e: self.on_meeting_selected())
-        self.records_tree.bind("<Double-1>", lambda _e: self.open_protocol())
+        self.records_tree = widgets.MeetingList(left, pal, on_select=self.on_meeting_selected,
+                                                on_open=lambda _i: self.open_protocol())
+        self.records_tree.pack(fill="both", expand=True)
         self.list_hint = ttk.Label(left, text="", style="Small.TLabel", wraplength=330, justify="left")
         self.list_hint.pack(fill="x", pady=(6, 0))
 
@@ -137,7 +131,7 @@ class MainWindow:
         btns.pack(anchor="w", pady=(10, 0))
         self.play_btn = ttk.Button(btns, text="▶  Слушать", command=self.play_selected_record)
         self.play_btn.pack(side="left")
-        self.proto_btn = ttk.Button(btns, text="Протокол", command=self.open_protocol)
+        self.proto_btn = ttk.Button(btns, text="Протокол (Word)", command=self.open_protocol)
         self.proto_btn.pack(side="left", padx=(6, 0))
         self.more_btn = ttk.Menubutton(btns, text="Ещё", width=6)
         self.more_btn.pack(side="left", padx=(6, 0))
@@ -149,9 +143,10 @@ class MainWindow:
                 lbl.configure(wraplength=max(200, event.width - 8))
         head.bind("<Configure>", rewrap)
 
-        self.action_bar = ttk.Frame(self.detail, padding=(0, 10, 0, 0))
-        self.action_text = ttk.Label(self.action_bar, text="", style="Muted.TLabel")
-        self.action_text.pack(side="left")
+        self.action_bar = tk.Frame(self.detail, bg=pal["select"], padx=14, pady=10)
+        self.action_text = tk.Label(self.action_bar, text="", bg=pal["select"], fg=pal["text"],
+                                    font=(theme.FONT, 10), anchor="w", justify="left")
+        self.action_text.pack(side="left", fill="x", expand=True)
         self.action_btn = ttk.Button(self.action_bar, text="", style="Accent.TButton")
         self.action_btn.pack(side="right")
 
@@ -170,6 +165,10 @@ class MainWindow:
         self.tr_text = self._text_tab(self.detail_nb, "Расшифровка")
 
         self.empty = ttk.Frame(right, padding=(10, 60))
+        big = widgets.app_icon(72)
+        if big is not None:
+            self._icons["big"] = big
+            ttk.Label(self.empty, image=big).pack(anchor="w", pady=(0, 16))
         ttk.Label(self.empty, text="Здесь появятся ваши встречи", style="H2.TLabel").pack(anchor="w")
         ttk.Label(self.empty, style="Muted.TLabel", wraplength=560, justify="left", text=(
             "Meeting Hub сам замечает онлайн-встречу в Chrome, Zoom, Teams, Телемосте и других, записывает её, "
@@ -261,37 +260,23 @@ class MainWindow:
         hits = daily.search(self.rec_folder, query) if query else None
         items = [i for i in rec_mod.list_recordings(self.rec_folder)
                  if hits is None or i["path"].stem in hits]
-        rows = []                                             # (день, iid, текст, (инфо, состояние), ключ)
+        rows = []
         for it in items:
             stem = it["path"].stem
             state, key = self.meeting_state(it)
-            short = self.SHORT.get(key) or (state.split()[-1] if state.endswith("%") else "в работе")
+            chip = self.SHORT.get(key) or (state.split()[-1] if state.endswith("%") else "в работе")
             info = " · ".join(x for x in (clock(stem), dur_text(it.get("duration_sec"))) if x)
-            rows.append((day_label(stem), str(it["path"]), meeting_title(it), (info, "  " + short), key))
-        tree = self.records_tree
-        structure = [(d, iid) for d, iid, _t, _i, _k in rows]
-        if structure == getattr(self, "_list_structure", None):
-            for _d, iid, title, info, key in rows:           # то же самое — только обновить подписи
-                tree.item(iid, text=title, values=info, tags=(key,))
-        else:
-            sel = self.selected
-            tree.delete(*tree.get_children())
-            days = {}
-            for day, iid, title, info, key in rows:
-                if day not in days:
-                    days[day] = tree.insert("", "end", iid="day:" + day, text=day, open=True, tags=("day",))
-                tree.insert(days[day], "end", iid=iid, text=title, values=info, tags=(key,))
-            self._list_structure = structure
-            last = self.rec_folder / (str(self.settings.get("last_selected", "")) + ".wav")
-            if sel is None and tree.exists(str(last)):
-                sel = last
-            if sel is not None and tree.exists(str(sel)):
-                tree.selection_set(str(sel))
-                tree.see(str(sel))
-            elif rows:
-                tree.selection_set(rows[0][1])
-            else:
-                self.selected = None
+            rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": meeting_title(it),
+                         "info": info, "chip": chip, "key": key})
+        lst = self.records_tree
+        lst.set_rows(rows)
+        sel = str(self.selected) if self.selected is not None else None
+        if sel is None or not lst.exists(sel):
+            last = str(self.rec_folder / (str(self.settings.get("last_selected", "")) + ".wav"))
+            sel = last if lst.exists(last) else (rows[0]["iid"] if rows else None)
+            self.selected = Path(sel) if sel else None
+        if sel:
+            lst.select(sel)
         if query:
             self.list_hint.config(text=f"Найдено встреч: {len(rows)}" if rows else "Ничего не найдено")
         else:
@@ -299,17 +284,11 @@ class MainWindow:
         self.show_meeting(self.selected)
 
     def meeting_rows(self):
-        return [iid for d in self.records_tree.get_children() for iid in self.records_tree.get_children(d)]
+        return self.records_tree.rows()
 
-    def on_meeting_selected(self):
-        sel = self.records_tree.selection()
-        if not sel:
-            return
-        iid = sel[0]
-        if iid.startswith("day:"):
-            kids = self.records_tree.get_children(iid)
-            if kids:
-                self.records_tree.selection_set(kids[0])
+    def on_meeting_selected(self, iid=None):
+        iid = iid or self.records_tree.selected
+        if not iid:
             return
         self.selected = Path(iid)
         if self.settings.get("last_selected") != self.selected.stem:
@@ -397,7 +376,7 @@ class MainWindow:
             else:
                 self.action_btn.pack_forget()
             if not self.action_bar.winfo_ismapped():
-                self.action_bar.pack(fill="x", before=self.detail_nb)
+                self.action_bar.pack(fill="x", before=self.detail_nb, pady=(12, 0))
         else:
             self.action_bar.pack_forget()
 
@@ -410,6 +389,7 @@ class MainWindow:
         if wav.exists():
             m.add_command(label="Расшифровать заново", command=lambda: self.transcribe_files([wav], force=True))
         if has_text:
+            m.add_command(label="Протокол в браузере", command=lambda: self.open_html_protocol(wav))
             m.add_command(label="Открыть расшифровку (TXT)", command=lambda: self.open_path(tr_mod.output_paths(wav)[0]))
         if self.summary_path(wav).exists():
             m.add_command(label="Сохранить задачи в CSV…", command=lambda: self.export_tasks(wav))
@@ -438,6 +418,18 @@ class MainWindow:
             self.detail_nb.tab(self.tasks_tab, text="Задачи")
             return
         out = []
+        decisions = [d for d in result.get("decisions") or [] if isinstance(d, dict)]
+        tasks = [t for t in result.get("tasks") or [] if isinstance(t, dict)]
+        questions = [q for q in result.get("open_questions") or [] if isinstance(q, dict)]
+
+        def plural(n, one, few, many):
+            return one if n % 10 == 1 and n % 100 != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+        chips = [(f" {len(decisions)} {plural(len(decisions), 'решение', 'решения', 'решений')} ", "chip_ok"),
+                 (f" {len(tasks)} {plural(len(tasks), 'задача', 'задачи', 'задач')} ", "chip_meet"),
+                 (f" {len(questions)} {plural(len(questions), 'вопрос', 'вопроса', 'вопросов')} ", "chip_busy")]
+        for i, (txt, tag) in enumerate(chips):
+            out.append((txt, (tag, "chips")))
+            out.append(("   " if i < len(chips) - 1 else "\n", ("chips",)))
 
         def section(title, lines):
             if not lines:
@@ -489,7 +481,7 @@ class MainWindow:
         wav = self.current()
         if wav is None:
             return
-        path = report_mod.protocol_paths(wav)[0]
+        path = report_mod.docx_path(wav) if report_mod.docx_available() else report_mod.protocol_paths(wav)[0]
         if not path.exists() or self._mtime(path) < max(self._mtime(self.summary_path(wav)),
                                                          self._mtime(tr_mod.output_paths(wav)[1])):
             path = self.make_protocol(wav)
@@ -497,6 +489,13 @@ class MainWindow:
             messagebox.showinfo("Протокол", "Протокол появится после расшифровки встречи.", parent=self.root)
             return
         self.open_path(path)
+
+    def open_html_protocol(self, wav):
+        path = report_mod.protocol_paths(wav)[0]
+        if not path.exists():
+            self.make_protocol(wav)
+        if path.exists():
+            self.open_path(path)
 
     def play_selected_record(self):
         wav = self.current()
@@ -588,7 +587,7 @@ class MainWindow:
         text, kind = self.status_view()
         bg, fg = self.pal["pill"][kind]
         try:
-            self.status.config(text=text, bg=bg, fg=fg)
+            self.status.set(text, bg, fg, outer=self.pal["bg"])
             self.rec_btn.config(text="■  Остановить" if self.recorder is not None else "●  Записать")
             sub = self.last_event_text or ""
             levels = self.recording_levels_text()
@@ -793,14 +792,16 @@ class MainWindow:
                      auto_pause=self.auto_pause.get())
             theme_changed = new_theme != s.get("theme", "system")
             s["theme"] = new_theme
+            if theme_changed:
+                self.apply_theme(new_theme)
+                theme_changed = False
             self.save_settings()
             tq = getattr(self, "tq", None)
             if tq is not None:
                 tq.language = None if lang.get() == "auto" else lang.get()
                 if old != (model.get(), lang.get()) and not tq.busy():
                     tq.engine = None
-            self.last_event_text = "Настройки сохранены." + (
-                " Оформление поменяется после перезапуска программы." if theme_changed else "")
+            self.last_event_text = "Настройки сохранены."
             self.refresh_status()
             win.destroy()
 
@@ -808,6 +809,22 @@ class MainWindow:
         bar.pack(fill="x")
         ttk.Button(bar, text="Отмена", command=win.destroy).pack(side="right")
         ttk.Button(bar, text="Сохранить", style="Accent.TButton", command=save).pack(side="right", padx=(0, 8))
+
+    def apply_theme(self, mode):
+        """Сменить оформление сразу, без перезапуска."""
+        self.pal = theme.apply(self.root, mode)
+        for text in (self.sum_text, self.tr_text):
+            theme.text_style(text, self.pal)
+            text.configure(state="disabled")
+        self.status.pal = self.pal
+        self.records_tree.set_pal(self.pal)
+        self.action_bar.configure(bg=self.pal["select"])
+        self.action_text.configure(bg=self.pal["select"], fg=self.pal["text"])
+        if getattr(self, "_placeholder", False):
+            self._entry_style("Placeholder.TEntry")
+        self.refresh_records()
+        self.show_meeting(self.selected, force=True)
+        self.refresh_status()
 
     # ------------------------------------------------------------------
     # Журнал обнаружения (для опытных)
