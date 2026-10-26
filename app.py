@@ -344,6 +344,7 @@ class App:
         self.rec_errors_seen = set()
         self._saving_threads = []
         self._ui_calls = queue.Queue()   # результаты фоновых потоков выполняются в потоке интерфейса
+        self.tray = None                 # значок в трее создаётся в конце __init__
         self.wizard = None
 
         header = ttk.Frame(root, padding=10); header.pack(fill="x")
@@ -423,7 +424,6 @@ class App:
             self._journal_note("Данные перенесены", "Из папки программы в профиль пользователя: " + ", ".join(imported))
         if not self.settings.get("first_run_done"):
             self.root.after(600, self.open_first_run)
-        self.tray = None
         self.start_tray()
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
         self.root.after(20 * 1000, lambda: self.check_updates(manual=False))

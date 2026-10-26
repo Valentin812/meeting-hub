@@ -163,6 +163,9 @@ jobs:
           while (-not (Test-Path "$data\meeting_hub.log") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
           Start-Sleep -Seconds 5
           if ($p.HasExited) { throw "MeetingHub.exe exited early with code $($p.ExitCode)" }
+          $p.Refresh()
+          Write-Output "::notice title=exe window::$($p.MainWindowTitle)"
+          if ($p.MainWindowTitle -notlike "Meeting Hub v*") { throw "main window not shown (error dialog?): '$($p.MainWindowTitle)'" }
           Stop-Process -Id $p.Id
           if (-not (Test-Path "$data\meeting_hub.log")) { throw "no log in the user data folder" }
           if (-not (Test-Path "$data\meeting_hub_training.json")) { throw "old data was not imported" }
@@ -174,10 +177,15 @@ jobs:
         shell: pwsh
         run: |
           $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
+          $log = "$env:LOCALAPPDATA\Meeting Hub\meeting_hub.log"
+          $before = if (Test-Path $log) { (Get-Content $log -Encoding utf8).Count } else { 0 }
           $p = Start-Process -FilePath "$app\MeetingHub.exe" -ArgumentList "--minimized" -PassThru
           Start-Sleep -Seconds 12
           if ($p.HasExited) { throw "MeetingHub.exe --minimized exited with code $($p.ExitCode)" }
           $p.Refresh()
+          if ($p.MainWindowTitle -like "*exception*" -or $p.MainWindowTitle -like "*error*") { throw "error dialog: $($p.MainWindowTitle)" }
+          $new = Get-Content $log -Encoding utf8 | Select-Object -Skip $before
+          if ($new -match "Traceback") { $new | Select-Object -Last 30; throw "traceback in the log" }
           Write-Output "::notice title=minimized::running, main window handle=$($p.MainWindowHandle)"
           Stop-Process -Id $p.Id
 
