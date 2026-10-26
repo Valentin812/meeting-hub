@@ -16,6 +16,11 @@ def protocol_paths(wav):
     return wav.with_name(wav.stem + ".protocol.html"), wav.with_name(wav.stem + ".protocol.md")
 
 
+def docx_path(wav):
+    wav = Path(wav)
+    return wav.with_name(wav.stem + ".protocol.docx")
+
+
 def load_parts(wav):
     """(meta записи, итоги или None, сегменты расшифровки или None)."""
     wav = Path(wav)
@@ -129,3 +134,111 @@ def write_protocol(wav):
     html_path.write_text(build_html(wav, meta, result, segments), encoding="utf-8")
     md_path.write_text(build_markdown(wav, meta, result, segments), encoding="utf-8")
     return html_path
+
+
+def docx_available():
+    try:
+        import docx  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def build_docx(wav, meta, result, segments, path):
+    """Протокол в Word: заголовок, дата, резюме, решения, задачи таблицей, вопросы, расшифровка."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH  # noqa: F401
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor, Cm
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.left_margin = sec.right_margin = Cm(2)
+    sec.top_margin = sec.bottom_margin = Cm(1.8)
+    normal = doc.styles["Normal"]
+    normal.font.name = "Segoe UI"
+    normal.element.rPr.rFonts.set(qn("w:eastAsia"), "Segoe UI")
+    normal.font.size = Pt(10.5)
+    for name, size in (("Title", 20), ("Heading 1", 14), ("Heading 2", 12)):
+        st = doc.styles[name]
+        st.font.name = "Segoe UI"
+        st.font.size = Pt(size)
+        st.font.color.rgb = RGBColor(0x1C, 0x1C, 0x1C)
+        rpr = st.element.get_or_add_rPr()
+        rpr.get_or_add_rFonts().set(qn("w:ascii"), "Segoe UI")
+        rpr.get_or_add_rFonts().set(qn("w:hAnsi"), "Segoe UI")
+    muted = RGBColor(0x61, 0x61, 0x61)
+
+    doc.add_paragraph(_title(wav, meta), style="Title")
+    p = doc.add_paragraph()
+    r = p.add_run(f"{_when(wav)} · длительность {_dur(meta.get('duration_sec'))}")
+    r.font.color.rgb = muted
+    if result:
+        doc.add_paragraph("Резюме", style="Heading 1")
+        for x in result.get("summary") or ["Не сформировано."]:
+            doc.add_paragraph(str(x), style="List Bullet")
+        decisions = [d for d in result.get("decisions") or [] if isinstance(d, dict)]
+        if decisions:
+            doc.add_paragraph("Решения", style="Heading 1")
+            for d in decisions:
+                doc.add_paragraph(str(d.get("text", "")), style="List Bullet")
+        tasks = [t for t in result.get("tasks") or [] if isinstance(t, dict)]
+        if tasks:
+            doc.add_paragraph("Задачи", style="Heading 1")
+            from docx.oxml import OxmlElement
+            table = doc.add_table(rows=1, cols=3)
+            table.style = "Table Grid"
+            table.autofit = False
+            widths = (Cm(9.5), Cm(4.3), Cm(3.2))
+
+            def fill(cells, values, header=False):
+                for cell, value, width in zip(cells, values, widths):
+                    cell.width = width
+                    cell.text = ""
+                    run = cell.paragraphs[0].add_run(value)
+                    if header:
+                        run.bold = True
+                        shade = OxmlElement("w:shd")
+                        shade.set(qn("w:val"), "clear")
+                        shade.set(qn("w:fill"), "EEF3F8")
+                        cell._tc.get_or_add_tcPr().append(shade)
+            fill(table.rows[0].cells, ("Задача", "Ответственный", "Срок"), header=True)
+            for t in tasks:
+                fill(table.add_row().cells, (str(t.get("task", "")), str(t.get("owner") or "—"),
+                                             str(t.get("deadline") or "—")))
+        questions = [q for q in result.get("open_questions") or [] if isinstance(q, dict)]
+        if questions:
+            doc.add_paragraph("Открытые вопросы", style="Heading 1")
+            for q in questions:
+                doc.add_paragraph(str(q.get("question", "")), style="List Bullet")
+        note = doc.add_paragraph()
+        nr = note.add_run("Итоги подготовлены ИИ по расшифровке речи — возможны ошибки, проверьте перед использованием.")
+        nr.italic = True
+        nr.font.size = Pt(9)
+        nr.font.color.rgb = muted
+    if segments:
+        doc.add_paragraph("Расшифровка", style="Heading 1")
+        for s in segments:
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(4)
+            t = p.add_run(tr.stamp(s["start"]) + "  ")
+            t.font.color.rgb = muted
+            t.font.size = Pt(9)
+            who = p.add_run(s["speaker"] + ": ")
+            who.bold = True
+            who.font.color.rgb = RGBColor(0x00, 0x5F, 0xB8) if s["speaker"] == tr.SPEAKERS[0] else RGBColor(0x7A, 0x3D, 0xB8)
+            p.add_run(s["text"])
+    tmp = Path(str(path) + ".tmp")
+    doc.save(str(tmp))
+    tmp.replace(path)
+    return Path(path)
+
+
+def write_docx(wav):
+    """Протокол в Word рядом с записью. None — если нет данных или нет python-docx."""
+    if not docx_available():
+        return None
+    meta, result, segments = load_parts(wav)
+    if not result and not segments:
+        return None
+    return build_docx(wav, meta, result, segments, docx_path(wav))

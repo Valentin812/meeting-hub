@@ -7,14 +7,14 @@ import os
 
 LIGHT = {
     "bg": "#fafafa", "surface": "#ffffff", "text": "#1c1c1c", "muted": "#616161", "faint": "#8a8a8a",
-    "border": "#e5e5e5", "accent": "#005fb8", "select": "#e8f1fb",
+    "border": "#e5e5e5", "accent": "#005fb8", "select": "#e5f0fb", "hover": "#f0f0f0", "card": "#ffffff",
     "me": "#005fb8", "they": "#7a3db8",
     "pill": {"ok": ("#dff6dd", "#0e700e"), "rec": ("#fde7e9", "#c42b1c"), "busy": ("#fff4ce", "#7a5a00"),
              "meet": ("#e8f1fb", "#005fb8"), "off": ("#ededed", "#5c5c5c")},
 }
 DARK = {
     "bg": "#1c1c1c", "surface": "#232323", "text": "#f0f0f0", "muted": "#ababab", "faint": "#8a8a8a",
-    "border": "#3a3a3a", "accent": "#60cdff", "select": "#2d3a46",
+    "border": "#3a3a3a", "accent": "#60cdff", "select": "#2b3946", "hover": "#2d2d2d", "card": "#272727",
     "me": "#60cdff", "they": "#d0a8ff",
     "pill": {"ok": ("#1f3a1f", "#9de09a"), "rec": ("#442726", "#ff9a8f"), "busy": ("#433519", "#fcd571"),
              "meet": ("#1f3346", "#9ccfff"), "off": ("#333333", "#c8c8c8")},
@@ -72,3 +72,7 @@ def text_style(widget, pal, size=10):
     widget.tag_configure("they", foreground=pal["they"], font=(FONT, size, "bold"))
     widget.tag_configure("bullet", lmargin1=8, lmargin2=24)
     widget.tag_configure("note", foreground=pal["muted"], font=(FONT, size - 1, "italic"), spacing1=14)
+    for name, (bg, fg) in pal["pill"].items():
+        widget.tag_configure("chip_" + name, background=bg, foreground=fg, font=(FONT, size - 1, "bold"))
+    widget.tag_configure("chips", spacing1=4, spacing3=6)
+    widget.tag_configure("lead", font=(FONT, size + 1), spacing3=6, lmargin1=8, lmargin2=8)

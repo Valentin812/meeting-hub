@@ -46,7 +46,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.0.0"
+APP_VERSION = "7.1.0"
 
 import support
 from support import app_dir, data_dir
@@ -525,6 +525,11 @@ class App(MainWindow):
         except Exception:
             self.log.exception("Протокол не создан")
             return None
+        try:
+            # Основной протокол — документ Word: открывается в Word, его удобно править и пересылать.
+            path = report_mod.write_docx(wav) or path
+        except Exception:
+            self.log.exception("Протокол Word не создан, остаётся HTML")
         if path is not None:
             self._journal_note("Протокол готов", path.name, "auto", file=path.name)
             if notify:
@@ -1197,7 +1202,7 @@ class App(MainWindow):
                 self.prompt.destroy()
             if self.recorder is not None or self._saving_threads:
                 try:
-                    self.status.config(text="Сохраняю запись, подождите…")
+                    self.status.set("Сохраняю запись, подождите…", *self.pal["pill"]["busy"])
                     self.root.update()
                 except tk.TclError:
                     pass
@@ -1357,6 +1362,7 @@ def cli_transcribe(path, size, language):
     eng = tr_mod.LocalWhisper(data_dir() / "models", size=size)
     txt = tr_mod.transcribe_file(path, eng, language)
     report_mod.write_protocol(path)
+    report_mod.write_docx(path)
     if sys.stdout is not None:
         print(txt.read_text(encoding="utf-8"))
     return txt

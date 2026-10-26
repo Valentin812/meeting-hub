@@ -5,3 +5,4 @@ faster-whisper>=1.1.0; python_version < "3.14"
 pystray>=0.19.5
 Pillow>=10.4
 sv-ttk>=2.6
+python-docx>=1.1

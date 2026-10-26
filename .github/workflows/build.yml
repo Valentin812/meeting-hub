@@ -35,7 +35,7 @@ jobs:
           --hidden-import audio_check --hidden-import support --hidden-import pyaudiowpatch
           --collect-data soundcard
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
-          --hidden-import transcriber --hidden-import pystray._win32 --collect-data sv_ttk
+          --hidden-import transcriber --hidden-import pystray._win32 --collect-data sv_ttk --collect-data docx
           app.py
 
       - name: Code signing certificate (optional)
@@ -149,6 +149,7 @@ jobs:
           $proto = Join-Path $env:RUNNER_TEMP "speech.protocol.html"
           if (-not (Test-Path $proto)) { throw "protocol was not created" }
           if ((Get-Content $proto -Encoding utf8 -Raw) -notmatch '(?i)transcription|friday|version') { throw "protocol has no transcript" }
+          if (-not (Test-Path (Join-Path $env:RUNNER_TEMP "speech.protocol.docx"))) { throw "Word protocol was not created" }
 
       - name: Test - GUI starts, imports data of an old version placed next to the exe
         timeout-minutes: 5
