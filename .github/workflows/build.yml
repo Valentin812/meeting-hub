@@ -221,9 +221,16 @@ jobs:
         timeout-minutes: 5
         shell: pwsh
         run: |
-          Start-Process -FilePath $env:setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          Get-Process MeetingHub -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Process -FilePath $env:setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/launch=1" -Wait
           $app = "$env:LOCALAPPDATA\Programs\Meeting Hub"
           if (-not (Test-Path "$app\MeetingHub.exe")) { throw "upgrade broke the installation" }
+          Start-Sleep -Seconds 8
+          $running = Get-Process MeetingHub -ErrorAction SilentlyContinue
+          if (-not $running) { throw "silent update with /launch=1 did not start the new version" }
+          Write-Output "::notice title=self-update::installer relaunched MeetingHub.exe (pid $($running[0].Id))"
+          $running | Stop-Process -Force
+          Start-Sleep -Seconds 2
           Start-Process -FilePath "$app\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
           Start-Sleep -Seconds 3
           if (Test-Path "$app\MeetingHub.exe") { throw "program not removed" }

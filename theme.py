@@ -75,4 +75,5 @@ def text_style(widget, pal, size=10):
     for name, (bg, fg) in pal["pill"].items():
         widget.tag_configure("chip_" + name, background=bg, foreground=fg, font=(FONT, size - 1, "bold"))
     widget.tag_configure("chips", spacing1=4, spacing3=6)
+    widget.tag_configure("now", background=pal["select"])
     widget.tag_configure("lead", font=(FONT, size + 1), spacing3=6, lmargin1=8, lmargin2=8)

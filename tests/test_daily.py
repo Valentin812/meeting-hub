@@ -90,7 +90,8 @@ class Updates(unittest.TestCase):
         self.assertEqual(daily.parse_version("v6.1"), (6, 1, 0))
 
     def test_newer_found(self):
-        self.assertEqual(daily.check_update("6.1.0", fetch=lambda: self.REL), ("6.2.0", "setup", "u2"))
+        version, asset, page = daily.check_update("6.1.0", fetch=lambda: self.REL)
+        self.assertEqual((version, asset["url"], asset["name"], page), ("6.2.0", "setup", "MeetingHubSetup-v6.2.0.exe", "u2"))
 
     def test_up_to_date(self):
         self.assertIsNone(daily.check_update("6.2.0", fetch=lambda: self.REL))
