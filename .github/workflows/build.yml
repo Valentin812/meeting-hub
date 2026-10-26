@@ -183,7 +183,7 @@ jobs:
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           New-Item -ItemType Directory -Force shots | Out-Null
           foreach ($mode in "light", "dark") {
-            $settings = @{ first_run_done = $true; recording_consent = $true; theme = $mode; check_updates = $false } | ConvertTo-Json
+            $settings = @{ first_run_done = $true; recording_consent = $true; theme = $mode; check_updates = $false; last_selected = "20261026_100500" } | ConvertTo-Json
             [IO.File]::WriteAllText("$data\meeting_hub_settings.json", $settings, [Text.UTF8Encoding]::new($false))
             $p = Start-Process -FilePath "$app\MeetingHub.exe" -PassThru
             Start-Sleep -Seconds 10

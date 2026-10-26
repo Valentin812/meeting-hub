@@ -21,7 +21,7 @@ from meeting_detector import ASKING, COUNTDOWN, ENDING, IN_MEETING
 
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
           "ноября", "декабря"]
-SEARCH_HINT = "Поиск по встречам"
+SEARCH_HINT = "Поиск: название, слова из разговора…"
 
 
 def day_label(stem, today=None):
@@ -93,7 +93,7 @@ class MainWindow:
         body.pack(fill="both", expand=True)
 
         # Слева — встречи
-        left = ttk.Frame(body, padding=(12, 12, 6, 12))
+        left = ttk.Frame(body, padding=(12, 12, 6, 12), width=470)
         body.add(left, weight=0)
         self.search_var = tk.StringVar()
         self.search_entry = ttk.Entry(left, textvariable=self.search_var)
@@ -105,10 +105,14 @@ class MainWindow:
         self.search_var.trace_add("write", self._on_search)
         listbox = ttk.Frame(left)
         listbox.pack(fill="both", expand=True)
-        self.records_tree = ttk.Treeview(listbox, columns=("info",), show="tree", selectmode="browse",
+        self.records_tree = ttk.Treeview(listbox, columns=("info", "state"), show="tree", selectmode="browse",
                                          style="Meetings.Treeview")
-        self.records_tree.column("#0", width=230, minwidth=160, stretch=True)
-        self.records_tree.column("info", width=150, minwidth=110, anchor="e", stretch=False)
+        self.records_tree.column("#0", width=250, minwidth=150, stretch=True)
+        self.records_tree.column("info", width=105, minwidth=90, anchor="e", stretch=False)
+        self.records_tree.column("state", width=92, minwidth=80, anchor="w", stretch=False)
+        for key in ("busy", "error"):
+            self.records_tree.tag_configure(key, foreground=pal["pill"]["busy" if key == "busy" else "rec"][1])
+        self.records_tree.tag_configure("audio", foreground=pal["muted"])
         self.records_tree.tag_configure("day", foreground=pal["muted"], font=(theme.FONT, 9, "bold"))
         sb = ttk.Scrollbar(listbox, orient="vertical", command=self.records_tree.yview)
         self.records_tree.configure(yscrollcommand=sb.set)
@@ -125,12 +129,6 @@ class MainWindow:
         self.detail = ttk.Frame(right)
         head = ttk.Frame(self.detail)
         head.pack(fill="x")
-        names = ttk.Frame(head)
-        names.pack(side="left", fill="x", expand=True)
-        self.d_title = ttk.Label(names, text="", style="H2.TLabel", wraplength=520, justify="left")
-        self.d_title.pack(anchor="w")
-        self.d_meta = ttk.Label(names, text="", style="Muted.TLabel")
-        self.d_meta.pack(anchor="w", pady=(2, 0))
         self.more_btn = ttk.Menubutton(head, text="⋯", width=3)
         self.more_btn.pack(side="right")
         self.more_menu = tk.Menu(self.more_btn, tearoff=False)
@@ -139,6 +137,12 @@ class MainWindow:
         self.proto_btn.pack(side="right", padx=(0, 6))
         self.play_btn = ttk.Button(head, text="▶  Слушать", command=self.play_selected_record)
         self.play_btn.pack(side="right", padx=(0, 6))
+        names = ttk.Frame(head)
+        names.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        self.d_title = ttk.Label(names, text="", style="H2.TLabel", wraplength=420, justify="left")
+        self.d_title.pack(anchor="w")
+        self.d_meta = ttk.Label(names, text="", style="Muted.TLabel", wraplength=420, justify="left")
+        self.d_meta.pack(anchor="w", pady=(2, 0))
 
         self.action_bar = ttk.Frame(self.detail, padding=(0, 10, 0, 0))
         self.action_text = ttk.Label(self.action_bar, text="", style="Muted.TLabel")
@@ -197,7 +201,9 @@ class MainWindow:
     def _entry_style(self, style):
         try:
             if style != "TEntry":
-                ttk.Style(self.root).configure(style, foreground=self.pal["faint"])
+                st = ttk.Style(self.root)
+                st.configure(style, foreground=self.pal["faint"])
+                st.map(style, foreground=[("!disabled", self.pal["faint"])])
             self.search_entry.configure(style=style)
         except tk.TclError:
             pass
@@ -215,8 +221,10 @@ class MainWindow:
     # ------------------------------------------------------------------
     # Список встреч
     # ------------------------------------------------------------------
+    SHORT = {"done": "итоги", "text": "текст", "audio": "аудио", "error": "ошибка"}
+
     def meeting_state(self, item):
-        """(короткий текст для списка, ключ состояния)."""
+        """(текст состояния, ключ состояния)."""
         wav = item["path"]
         st = getattr(self, "tq", None) and self.tq.status.get(str(wav))
         s = st["state"] if st else ""
@@ -248,28 +256,33 @@ class MainWindow:
         hits = daily.search(self.rec_folder, query) if query else None
         items = [i for i in rec_mod.list_recordings(self.rec_folder)
                  if hits is None or i["path"].stem in hits]
-        rows = []                                             # (день, iid, текст, инфо)
+        rows = []                                             # (день, iid, текст, (инфо, состояние), ключ)
         for it in items:
             stem = it["path"].stem
-            state, _ = self.meeting_state(it)
-            info = " · ".join(x for x in (clock(stem), dur_text(it.get("duration_sec")), state) if x)
-            rows.append((day_label(stem), str(it["path"]), meeting_title(it), info))
+            state, key = self.meeting_state(it)
+            short = self.SHORT.get(key) or (state.split()[-1] if state.endswith("%") else "в работе")
+            info = " · ".join(x for x in (clock(stem), dur_text(it.get("duration_sec"))) if x)
+            rows.append((day_label(stem), str(it["path"]), meeting_title(it), (info, "  " + short), key))
         tree = self.records_tree
-        structure = [(d, iid) for d, iid, _t, _i in rows]
+        structure = [(d, iid) for d, iid, _t, _i, _k in rows]
         if structure == getattr(self, "_list_structure", None):
-            for _d, iid, title, info in rows:                # то же самое — только обновить подписи
-                tree.item(iid, text="  " + title, values=(info,))
+            for _d, iid, title, info, key in rows:           # то же самое — только обновить подписи
+                tree.item(iid, text=title, values=info, tags=(key,))
         else:
             sel = self.selected
             tree.delete(*tree.get_children())
             days = {}
-            for day, iid, title, info in rows:
+            for day, iid, title, info, key in rows:
                 if day not in days:
                     days[day] = tree.insert("", "end", iid="day:" + day, text=day, open=True, tags=("day",))
-                tree.insert(days[day], "end", iid=iid, text="  " + title, values=(info,))
+                tree.insert(days[day], "end", iid=iid, text=title, values=info, tags=(key,))
             self._list_structure = structure
+            last = self.rec_folder / (str(self.settings.get("last_selected", "")) + ".wav")
+            if sel is None and tree.exists(str(last)):
+                sel = last
             if sel is not None and tree.exists(str(sel)):
                 tree.selection_set(str(sel))
+                tree.see(str(sel))
             elif rows:
                 tree.selection_set(rows[0][1])
             else:
@@ -294,6 +307,9 @@ class MainWindow:
                 self.records_tree.selection_set(kids[0])
             return
         self.selected = Path(iid)
+        if self.settings.get("last_selected") != self.selected.stem:
+            self.settings["last_selected"] = self.selected.stem
+            self.save_settings()
         self.show_meeting(self.selected, force=True)
 
     # ------------------------------------------------------------------
