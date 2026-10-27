@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.6.0"
+APP_VERSION = "7.6.1"
 
 import support
 from support import app_dir, data_dir
@@ -1496,6 +1496,26 @@ def cli_import(path, size, language):
         json.dumps({"wav": wav.name, "text": txt.read_text(encoding="utf-8")}, ensure_ascii=False), encoding="utf-8")
 
 
+def cli_voices_test():
+    """MeetingHub.exe --voices-test: модуль голосов в установленной программе — модель, отпечаток тона."""
+    import numpy as np
+    import voices
+    out = {"ok": False}
+    try:
+        ok, why = voices.available()
+        if not ok:
+            raise RuntimeError(why)
+        voices.download_model(data_dir())
+        emb = voices.Embedder(voices.model_path(data_dir()))
+        t = np.arange(16000 * 2) / 16000
+        v = emb.embed((np.sin(2 * np.pi * 220 * t) * 0.3).astype(np.float32))
+        out = {"ok": v is not None and len(v) > 50, "dim": 0 if v is None else int(len(v))}
+    except Exception as e:
+        out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    (data_dir() / "voices_test.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
 def cli_play_test(seconds=1.5):
     """MeetingHub.exe --play-test: проиграть тон внутри программы и записать, каким способом вышел звук."""
     import wave
@@ -1525,6 +1545,9 @@ def cli_play_test(seconds=1.5):
 
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--voices-test"]:
+        cli_voices_test()
+        return
     if args[:1] == ["--play-test"]:
         cli_play_test()
         return

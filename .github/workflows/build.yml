@@ -143,6 +143,17 @@ jobs:
           if (-not $r.ok) { throw "in-app playback failed: $j" }
           if ($r.position -lt 1.0) { throw "playback did not advance: $j" }
 
+      - name: Test - installed app loads the voice model (speaker fingerprints)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
+          $data = "$env:LOCALAPPDATA\Meeting Hub"
+          Start-Process -FilePath $exe -ArgumentList "--voices-test" -Wait
+          $j = Get-Content "$data\voices_test.json" -Encoding utf8 -Raw
+          Write-Output "::notice title=exe voices_test::$j"
+          if (($j | ConvertFrom-Json).ok -ne $true) { throw "voices module failed in installed app: $j" }
+
       - name: Test - installed app transcribes speech (tiny model, synthesized voice)
         timeout-minutes: 15
         shell: pwsh
