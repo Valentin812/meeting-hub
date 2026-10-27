@@ -173,6 +173,16 @@ class VoicesUI:
                 return
             self.run_voices(Path(wav), manual=True, speakers=n)
         ttk.Button(row, text=button_text, command=go).pack(side="left")
+        found = len((sp or {}).get("clusters") or [])
+        if sp is not None:
+            def plus(delta):
+                n = max(1, found + delta)
+                if messagebox.askyesno("Голоса", f"Искать {n} собеседн. вместо {found}? Подписанные имена "
+                                       "подставятся там, где голос узнаётся.", parent=self.root):
+                    self.run_voices(Path(wav), manual=True, speakers=n)
+            ttk.Button(row, text="＋ Ещё голос", command=lambda: plus(1)).pack(side="left", padx=(8, 0))
+            if found > 1:
+                ttk.Button(row, text="− Лишний", command=lambda: plus(-1)).pack(side="left", padx=(4, 0))
         return row
 
     def play_clip(self, wav, clip):

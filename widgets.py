@@ -56,12 +56,12 @@ class MeetingList(ttk.Frame):
         super().__init__(master)
         self.pal = pal
         self.on_select, self.on_open = on_select, on_open
-        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg=pal["bg"])
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg=pal.get("sidebar", pal["bg"]))
         self.sb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.sb.set)
         self.sb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.inner = tk.Frame(self.canvas, bg=pal["bg"])
+        self.inner = tk.Frame(self.canvas, bg=pal.get("sidebar", pal["bg"]))
         self.win = self.canvas.create_window(0, 0, anchor="nw", window=self.inner)
         self.inner.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.win, width=e.width))
@@ -105,14 +105,14 @@ class MeetingList(ttk.Frame):
             for child in self.inner.winfo_children():
                 child.destroy()
             self.cards, self.order = {}, []
-            self.canvas.configure(bg=self.pal["bg"])
-            self.inner.configure(bg=self.pal["bg"])
+            self.canvas.configure(bg=self.pal.get("sidebar", self.pal["bg"]))
+            self.inner.configure(bg=self.pal.get("sidebar", self.pal["bg"]))
             day = None
             for r in rows:
                 if r["day"] != day:
                     day = r["day"]
                     tk.Label(self.inner, text=day.upper(), font=self.day_font, fg=self.pal["faint"],
-                             bg=self.pal["bg"], anchor="w").pack(fill="x", padx=10, pady=(14 if self.order else 4, 4))
+                             bg=self.pal.get("sidebar", self.pal["bg"]), anchor="w").pack(fill="x", padx=10, pady=(14 if self.order else 4, 4))
                 self._make_card(r)
             self._structure = structure
             if self.selected not in self.cards:
@@ -123,17 +123,17 @@ class MeetingList(ttk.Frame):
 
     def _make_card(self, r):
         pal = self.pal
-        card = tk.Frame(self.inner, bg=pal["bg"], cursor="hand2")
+        card = tk.Frame(self.inner, bg=pal.get("sidebar", pal["bg"]), cursor="hand2")
         card.pack(fill="x", padx=4, pady=1)
-        bar = tk.Frame(card, width=3, bg=pal["bg"])
+        bar = tk.Frame(card, width=3, bg=pal.get("sidebar", pal["bg"]))
         bar.pack(side="left", fill="y")
-        body = tk.Frame(card, bg=pal["bg"])
+        body = tk.Frame(card, bg=pal.get("sidebar", pal["bg"]))
         body.pack(side="left", fill="both", expand=True, padx=(9, 10), pady=7)
         chip = tk.Label(body, font=self.small_font, padx=7, pady=1)
         chip.pack(side="right", anchor="n", pady=(2, 0))
-        title = tk.Label(body, font=self.title_font, anchor="w", justify="left", bg=pal["bg"], fg=pal["text"])
+        title = tk.Label(body, font=self.title_font, anchor="w", justify="left", bg=pal.get("sidebar", pal["bg"]), fg=pal["text"])
         title.pack(fill="x")
-        info = tk.Label(body, font=self.small_font, anchor="w", bg=pal["bg"], fg=pal["muted"])
+        info = tk.Label(body, font=self.small_font, anchor="w", bg=pal.get("sidebar", pal["bg"]), fg=pal["muted"])
         info.pack(fill="x")
         w = {"card": card, "bar": bar, "body": body, "title": title, "info": info, "chip": chip, "hover": False}
         self.cards[r["iid"]] = w
@@ -160,7 +160,7 @@ class MeetingList(ttk.Frame):
     def _paint(self, iid):
         w, pal = self.cards[iid], self.pal
         sel = iid == self.selected
-        bg = pal["select"] if sel else (pal["hover"] if w["hover"] else pal["bg"])
+        bg = pal["select"] if sel else (pal["hover"] if w["hover"] else pal.get("sidebar", pal["bg"]))
         for key in ("card", "body", "title", "info"):
             w[key].configure(bg=bg)
         w["title"].configure(fg=pal["select_fg"] if sel else pal["text"])

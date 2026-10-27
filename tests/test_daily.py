@@ -132,5 +132,18 @@ class Autostart(unittest.TestCase):
                 daily.set_autostart(True)
 
 
+class UpdateOfferTests(unittest.TestCase):
+    def test_offer(self):
+        f = daily.update_offer
+        self.assertEqual(f("7.8.0", {}, 100, False), "show")
+        self.assertEqual(f("7.8.0", {}, 100, True), "wait")
+        self.assertEqual(f("7.8.0", {"skip_version": "7.8.0"}, 100, False), "hide")
+        snooze = {"update_snooze_until": 200, "update_snooze_version": "7.8.0"}
+        self.assertEqual(f("7.8.0", snooze, 100, False), "hide")
+        self.assertEqual(f("7.8.0", snooze, 300, False), "show")
+        self.assertEqual(f("7.9.0", snooze, 100, False), "show")      # новая версия — снова предлагаем
+
+
+
 if __name__ == "__main__":
     unittest.main()

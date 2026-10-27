@@ -70,6 +70,23 @@ class Tray:
         m = int(seconds // 60)
         return f"● ИДЁТ ЗАПИСЬ ВСТРЕЧИ · {m // 60}:{m % 60:02d}" if m >= 60 else f"● ИДЁТ ЗАПИСЬ ВСТРЕЧИ · {m} мин"
 
+    @staticmethod
+    def left_click_opens_menu(icon):
+        """Щелчок левой кнопкой по значку показывает то же меню, что и правой. False — не вышло (останется
+        стандартное действие: открыть окно)."""
+        try:
+            from pystray._util import win32
+            handlers = icon._message_handlers
+            orig = handlers[win32.WM_NOTIFY]
+            left, right = win32.WM_LBUTTONUP, win32.WM_RBUTTONUP
+        except Exception:
+            return False
+
+        def handler(wparam, lparam):
+            return orig(wparam, right if lparam == left else lparam)
+        handlers[win32.WM_NOTIFY] = handler
+        return True
+
     def start(self):
         import pystray
         rec = lambda _i=None: bool(self.is_recording())
@@ -82,6 +99,7 @@ class Tray:
             pystray.MenuItem("Выход", lambda *_: self.on_quit()),
         )
         self.icon = pystray.Icon("MeetingHub", make_image(), "Meeting Hub", menu)
+        self.left_menu = self.left_click_opens_menu(self.icon)
         self.icon.run_detached()
         return self
 

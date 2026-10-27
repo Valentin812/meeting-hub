@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.7.0"
+APP_VERSION = "7.8.0"
 
 import support
 from support import app_dir, data_dir
@@ -345,6 +345,8 @@ class App(MainWindow):
         self._saving_threads = []
         self._ui_calls = queue.Queue()   # результаты фоновых потоков выполняются в потоке интерфейса
         self.tray = None                 # значок в трее создаётся в конце __init__
+        self.update_found = None
+        self._update_toast = None
         self.wizard = None
 
         self.summary_jobs = []           # [(запись, автоматически)] — итоги по очереди
@@ -666,7 +668,7 @@ class App(MainWindow):
         threading.Thread(target=work, name="update-check", daemon=True).start()
         if not manual:
             try:
-                self.root.after(24 * 3600 * 1000, lambda: self.check_updates(manual=False))
+                self.root.after(4 * 3600 * 1000, lambda: self.check_updates(manual=False))
             except tk.TclError:
                 pass
 
@@ -679,34 +681,92 @@ class App(MainWindow):
         version, asset, page = found
         if self.settings.get("skip_version") == version and not manual:
             return
+        self.update_found = found
         self.last_event_text = f"Доступна новая версия {version}"
+        self.show_update_button(version)
         self.refresh_status()
+        if manual:
+            self.show_window()
+            self.install_found_update()
+            return
+        self._offer_update()
+
+    def _offer_update(self):
+        """Само предлагает обновиться: окошко в углу экрана (даже если программа свёрнута в трей)."""
+        found = getattr(self, "update_found", None)
+        if not found or getattr(self, "_update_toast", None) is not None:
+            return
+        version = found[0]
+        busy = self.recorder is not None or self.detector.in_meeting or self.detector.state != IDLE
+        what = daily.update_offer(version, self.settings, time.time(), busy)
+        if what == "wait":
+            try:
+                self.root.after(120 * 1000, self._offer_update)       # после встречи
+            except tk.TclError:
+                pass
+            return
+        if what == "hide" or getattr(self, "_offered_version", None) == version:
+            return
+        self._offered_version = version
+        self.update_toast(found)
+        if self.tray is not None:
+            self.tray.notify(f"Вышла версия {version}. Нажмите «Обновить сейчас» в окошке у часов.",
+                             "Meeting Hub: обновление")
+
+    def update_toast(self, found):
+        version, asset, page = found
         try:
-            hidden = self.root.state() in ("withdrawn", "iconic")
+            win = self._update_toast = tk.Toplevel(self.root)
+            win.overrideredirect(True)
+            win.attributes("-topmost", True)
+            frame = ttk.Frame(win, padding=14, relief="solid")
+            frame.pack()
+            ttk.Label(frame, text=f"Вышла новая версия {version}", font=(theme.FONT, 11, "bold")).pack(anchor="w")
+            ttk.Label(frame, text=f"У вас {APP_VERSION}. Обновление ставится за минуту, записи и настройки "
+                      "сохраняются.", style="Muted.TLabel", wraplength=340, justify="left").pack(anchor="w",
+                                                                                                pady=(4, 0))
+            row = ttk.Frame(frame); row.pack(anchor="e", pady=(10, 0))
+
+            def close():
+                self._update_toast = None
+                if win.winfo_exists():
+                    win.destroy()
+
+            def now():
+                close()
+                self.show_window()
+                self.install_found_update()
+
+            def later():
+                self.settings["update_snooze_until"] = time.time() + 12 * 3600
+                self.settings["update_snooze_version"] = version
+                self.save_settings()
+                close()
+
+            def skip():
+                self.settings["skip_version"] = version
+                self.save_settings()
+                self.hide_update_button()
+                close()
+            ttk.Button(row, text="Пропустить версию", command=skip).pack(side="left")
+            ttk.Button(row, text="Позже", command=later).pack(side="left", padx=6)
+            ttk.Button(row, text="Обновить сейчас", style="Accent.TButton", command=now).pack(side="left")
+            win.update_idletasks()
+            win.geometry(f"+{win.winfo_screenwidth() - win.winfo_width() - 24}+"
+                         f"{win.winfo_screenheight() - win.winfo_height() - 72}")
         except tk.TclError:
+            self._update_toast = None
+
+    def install_found_update(self):
+        found = getattr(self, "update_found", None)
+        if not found:
             return
-        if hidden and not manual:
-            # Не показываем диалог поверх работы: уведомление у часов, вопрос — когда откроют окно.
-            self.pending_update = found
-            if self.tray is not None:
-                self.tray.notify(f"Доступна версия {version}. Откройте Meeting Hub, чтобы обновить.")
-            return
-        auto = updater.can_self_update() and asset is not None
-        answer = messagebox.askyesnocancel(
-            "Доступно обновление",
-            f"Вышла версия Meeting Hub {version} (у вас {APP_VERSION}).\n\n"
-            + ("«Да» — обновить сейчас: программа скачает обновление, установит его и перезапустится "
-               "(около минуты, записи и настройки сохранятся).\n" if auto else
-               "«Да» — открыть страницу загрузки.\n")
-            + "«Нет» — напомнить позже. «Отмена» — пропустить эту версию.", parent=self.root)
-        if answer and auto:
+        version, asset, page = found
+        if updater.can_self_update() and asset is not None:
             self.start_update(version, asset)
-        elif answer:
+        else:
             import webbrowser
             webbrowser.open((asset or {}).get("url") or page)
-        elif answer is None:
-            self.settings["skip_version"] = version
-            self.save_settings()
 
     def start_update(self, version, asset):
         if self.recorder is not None or self.detector.in_meeting:
@@ -1282,9 +1342,6 @@ class App(MainWindow):
             self.root.focus_force()
         except tk.TclError:
             pass
-        pending, self.pending_update = getattr(self, "pending_update", None), None
-        if pending is not None:
-            self.root.after(400, lambda: self._update_checked(pending, "", True))
 
     def start_tray(self):
         if not tray_mod.available():
