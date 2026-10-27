@@ -133,8 +133,8 @@ class ChatUI:
         def work():
             answer, error = "", ""
             try:
-                answer = chat.stream_answer(model, messages, lambda t: put((self._chat_piece, (key, t))),
-                                            self.chat_cancel)
+                answer = self.llm_router(model).stream(messages, lambda t: put((self._chat_piece, (key, t))),
+                                                       self.chat_cancel)
             except Exception as e:
                 error = str(e)
             put((self._chat_done, (key, answer, error)))

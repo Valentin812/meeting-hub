@@ -15,6 +15,7 @@ from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
 import daily
+import gigachat
 import recorder as rec_mod
 import importer
 import report as report_mod
@@ -1140,6 +1141,27 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         ttk.Checkbutton(p, text="Не проверять сертификат Сбера (если «Проверить» пишет про сертификат)",
                         variable=s_insecure).pack(anchor="w", padx=(28, 0), pady=(8, 0))
 
+        ttk.Separator(p).pack(fill="x", pady=(14, 8))
+        g_on = tk.BooleanVar(value=bool(s.get("giga_enabled")))
+        g_key = tk.StringVar(value=s.get("giga_key", ""))
+        g_model = tk.StringVar(value=s.get("giga_model", gigachat.DEFAULT_MODEL))
+        g_scope = tk.StringVar(value=s.get("giga_scope", gigachat.SCOPES[0]))
+        ttk.Checkbutton(p, text="Итоги, задачи и чат через GigaChat (Сбер)", variable=g_on).pack(anchor="w")
+        hint(p, "Если облако не отвечает или токены кончились, программа сама использует локальную модель. "
+                "Текст встреч уходит на серверы Сбера — включайте, только если это допустимо для ваших встреч.")
+        grow = ttk.Frame(p); grow.pack(fill="x", padx=(28, 0))
+        ttk.Label(grow, text="Ключ GigaChat").pack(side="left")
+        ttk.Entry(grow, textvariable=g_key, show="•", width=30).pack(side="left", padx=8)
+        ttk.Button(grow, text="Проверить", command=lambda: self.check_giga(
+            (g_key.get() or s_key.get()).strip(), g_scope.get(), s_insecure.get(), win)).pack(side="left")
+        hint(p, "Пусто — используется ключ SaluteSpeech (подойдёт, если у проекта включены оба сервиса).")
+        mrow = ttk.Frame(p); mrow.pack(fill="x", padx=(28, 0), pady=(4, 0))
+        ttk.Label(mrow, text="Модель").pack(side="left")
+        ttk.Combobox(mrow, textvariable=g_model, values=list(gigachat.MODELS), width=16).pack(side="left", padx=8)
+        ttk.Label(mrow, text="Доступ").pack(side="left", padx=(12, 0))
+        ttk.Combobox(mrow, textvariable=g_scope, values=list(gigachat.SCOPES), state="readonly",
+                     width=18).pack(side="left", padx=8)
+
         # 4. Хранение
         p = page("Хранение")
         keep_now = int(s.get("keep_audio_days", 0))
@@ -1202,6 +1224,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                     "SaluteSpeech", "Записи встреч будут отправляться в облако Сбера для распознавания.\n\n"
                     "Включить?", icon="warning", parent=win):
                 s_on.set(False)
+            if g_on.get() and not s.get("giga_enabled") and not messagebox.askokcancel(
+                    "GigaChat", "Тексты встреч (расшифровка и вопросы в чате) будут отправляться в облако Сбера.\n\n"
+                    "Включить?", icon="warning", parent=win):
+                g_on.set(False)
             new_theme = dict(self.THEMES)[theme_var.get()]
             s.update(close_to_tray=bool(tray_var.get()), check_updates=bool(upd.get()),
                      keep_audio_days=dict(self.KEEP_CHOICES)[keep.get()], whisper_model=model.get(),
@@ -1209,7 +1235,9 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      record_meetings=self.record_meetings.get(), auto_transcribe=self.auto_transcribe.get(),
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()), salute_enabled=bool(s_on.get()),
-                     salute_key=s_key.get().strip(), salute_insecure=bool(s_insecure.get()))
+                     salute_key=s_key.get().strip(), salute_insecure=bool(s_insecure.get()),
+                     giga_enabled=bool(g_on.get()), giga_key=g_key.get().strip(),
+                     giga_model=g_model.get().strip() or gigachat.DEFAULT_MODEL, giga_scope=g_scope.get())
             theme_changed = new_theme != s.get("theme", "system")
             s["theme"] = new_theme
             if theme_changed:
