@@ -11,6 +11,11 @@ class AiSetupUI:
     def ai_model(self):
         return (self.settings.get("ollama_model") or self.default_llm).strip()
 
+    def _save_ai_model(self, model):
+        if self.settings.get("ollama_model") != model:
+            self.settings["ollama_model"] = model
+            self.save_settings()
+
     def offer_ai_setup(self, why=""):
         """Предложить установить ИИ (не чаще раза за запуск, если не просили сами)."""
         if getattr(self, "_ai_offered", False):
@@ -27,8 +32,20 @@ class AiSetupUI:
             self._ai_win.lift()
             return
         model = self.ai_model()
-        if ai_setup.status(model) == "ok":
-            messagebox.showinfo("ИИ для итогов", f"Всё уже готово: модель «{model}» установлена и работает.",
+        ram = ai_setup.ram_gb()
+        better = ai_setup.upgrade_for(model, ram)
+        ready = ai_setup.status(model) == "ok"
+        if better:
+            rec, size = better
+            ask = (f"В вашем компьютере {ram:.0f} ГБ памяти — подойдёт более сильная модель «{rec}» "
+                   f"(загрузка около {size:g} ГБ, итоги точнее, но готовятся немного дольше). Использовать её?"
+                   if ram else f"Подойдёт более сильная модель «{rec}». Использовать её?")
+            if messagebox.askyesno("ИИ для итогов", ask, parent=self.root):
+                model = rec
+                ready = ai_setup.status(model) == "ok"
+        if ready:
+            self._save_ai_model(model)
+            messagebox.showinfo("ИИ для итогов", f"Всё готово: модель «{model}» установлена и работает.",
                                 parent=self.root)
             return
         win = self._ai_win = tk.Toplevel(self.root)
@@ -70,6 +87,7 @@ class AiSetupUI:
         def work():
             try:
                 ai_setup.setup(model, self.data_dir / "updates", progress, cancel)
+                self._ui_calls.put((self._save_ai_model, (model,)))
                 self._ui_calls.put((finish, ("",)))
             except Exception as e:
                 self._ui_calls.put((finish, (str(e) or "Неизвестная ошибка",)))

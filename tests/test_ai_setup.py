@@ -39,6 +39,26 @@ class Tags(BaseHTTPRequestHandler):
         pass
 
 
+class RecommendTests(unittest.TestCase):
+    def test_ladder(self):
+        self.assertEqual(ai_setup.recommend(4)[0], "qwen2.5:3b")
+        self.assertEqual(ai_setup.recommend(8)[0], "qwen2.5:3b")
+        self.assertEqual(ai_setup.recommend(16)[0], "qwen2.5:7b")
+        self.assertEqual(ai_setup.recommend(24)[0], "qwen2.5:7b")
+        self.assertEqual(ai_setup.recommend(32)[0], "qwen2.5:14b")
+        self.assertEqual(ai_setup.recommend(None)[0], "qwen2.5:3b")      # не смогли определить — безопасная
+
+    def test_upgrade_only_from_ladder(self):
+        self.assertEqual(ai_setup.upgrade_for("qwen2.5:3b", 24)[0], "qwen2.5:7b")
+        self.assertIsNone(ai_setup.upgrade_for("qwen2.5:7b", 24))
+        self.assertIsNone(ai_setup.upgrade_for("qwen2.5:7b", 8))          # не понижаем
+        self.assertIsNone(ai_setup.upgrade_for("llama3:8b", 24))          # свою модель не трогаем
+
+    def test_ram_detected_here(self):
+        r = ai_setup.ram_gb()
+        self.assertTrue(r is None or r > 0.5)
+
+
 class StatusTests(unittest.TestCase):
     def test_has_model(self):
         self.assertTrue(ai_setup.has_model(["qwen2.5:3b"], "qwen2.5:3b"))
