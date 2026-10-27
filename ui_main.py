@@ -589,6 +589,10 @@ class MainWindow:
         wav = self.current()
         if wav is None:
             return
+        if not wav.exists():
+            messagebox.showinfo("Встреча", "Аудио этой встречи удалено по сроку хранения; текст сохранён.",
+                                parent=self.root)
+            return
         try:
             self._ensure_player(wav)
             self.player.toggle()
@@ -702,16 +706,6 @@ class MainWindow:
             self.make_protocol(wav)
         if path.exists():
             self.open_path(path)
-
-    def play_selected_record(self):
-        wav = self.current()
-        if wav is None:
-            return
-        if not wav.exists():
-            messagebox.showinfo("Встреча", "Аудио этой встречи удалено по сроку хранения; текст сохранён.",
-                                parent=self.root)
-            return
-        self.open_path(wav)
 
     def show_in_folder(self, wav):
         target = wav if wav.exists() else tr_mod.output_paths(wav)[0]
