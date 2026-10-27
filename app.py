@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.11.0"
+APP_VERSION = "7.12.0"
 
 import support
 from support import app_dir, data_dir
@@ -513,6 +513,39 @@ class App(MainWindow):
                 factory, language=self.settings.get("language", "ru"), log=self.log,
                 on_done=lambda key, st: self._ui_calls.put((self._transcribed, (key, st))))
         return self.tq
+
+    def llm_router(self, model=None):
+        """Куда идут итоги и чат: GigaChat, если включён и есть ключ, иначе только локальная Ollama."""
+        import gigachat
+        s = self.settings
+        local = (model or s.get("ollama_model") or DEFAULT_MODEL).strip()
+        key = (s.get("giga_key") or s.get("salute_key") or "").strip()
+        sig = (key, s.get("giga_scope"), bool(s.get("salute_insecure")), s.get("giga_model"), local)
+        if getattr(self, "_router_sig", None) != sig or getattr(self, "_router", None) is None:
+            client = None
+            if s.get("giga_enabled") and key:
+                client = gigachat.GigaClient(key, s.get("giga_scope") or gigachat.SCOPES[0],
+                                             verify_tls=not s.get("salute_insecure", False))
+            self._router = gigachat.LlmRouter(local, client, s.get("giga_model") or gigachat.DEFAULT_MODEL,
+                                              notify=self._giga_fallback)
+            self._router_sig = sig
+        return self._router
+
+    def _giga_fallback(self, reason):
+        self._ui_calls.put((lambda: self._journal_note(
+            "GigaChat недоступен", f"{reason}. Использую локальную модель.", "auto"), ()))
+
+    def check_giga(self, key, scope, insecure, parent=None):
+        import gigachat
+
+        def worker():
+            try:
+                msg = gigachat.GigaClient(key, scope, verify_tls=not insecure, timeout=20).check()
+                show = messagebox.showinfo
+            except Exception as e:
+                msg, show = f"Не получилось: {e}", messagebox.showwarning
+            self._ui_calls.put((lambda: show("GigaChat", msg, parent=parent or self.root), ()))
+        threading.Thread(target=worker, daemon=True).start()
 
     def _salute_fallback(self, reason):
         """Из потока расшифровки: SaluteSpeech не сработал, дальше — локальная модель."""
@@ -1479,7 +1512,9 @@ class App(MainWindow):
 
         def worker():
             try:
-                result = ollama_request(model, transcript, self.analysis_cancel)
+                router = self.llm_router(model)
+                result = analyze_transcript(transcript, lambda system, user: router.chat_json(
+                    system, user, self.analysis_cancel), self.analysis_cancel)
                 if self.analysis_cancel.is_set():
                     raise InterruptedError("Обнаружена встреча.")
                 self._ui_calls.put((self.show_result, (result,)))
