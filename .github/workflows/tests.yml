@@ -62,6 +62,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          PYTHONIOENCODING: utf-8
         run: |
           try { gh api repos/k2-fsa/sherpa-onnx/releases/tags/speaker-recongition-models --jq '[.assets[].name]|join(" ")' | ForEach-Object { Write-Output "::notice title=speaker models::$_" } } catch { Write-Output "assets list unavailable" }
           Add-Type -AssemblyName System.Speech

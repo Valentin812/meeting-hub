@@ -17,6 +17,10 @@ sys.path.insert(0, str(ROOT))
 import transcriber as tr  # noqa: E402
 import voices  # noqa: E402
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 src = Path(sys.argv[1])
 work = Path(tempfile.mkdtemp())
 order = ["v1_1", "v2_1", "v1_2", "v2_2", "v1_3", "v2_3"]
