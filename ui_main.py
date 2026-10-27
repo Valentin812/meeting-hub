@@ -22,6 +22,7 @@ import theme
 import transcriber as tr_mod
 import widgets
 from ui_voices import VoicesUI
+from ui_chat import ChatUI
 import player as player_mod
 from meeting_detector import ASKING, COUNTDOWN, ENDING, IN_MEETING
 
@@ -85,7 +86,7 @@ def read_json(path):
         return None
 
 
-class MainWindow(VoicesUI):
+class MainWindow(VoicesUI, ChatUI):
     """Примесь к App: главное окно, карточка встречи и настройки."""
 
     # ------------------------------------------------------------------
@@ -216,6 +217,7 @@ class MainWindow(VoicesUI):
         self.tasks_tab = tasks
         self.tr_text = self._text_tab(self.detail_nb, "Расшифровка")
         self.build_voices_tab(self.detail_nb)
+        self.build_chat_tab(self.detail_nb)
 
         self.empty = ttk.Frame(right, padding=(10, 60))
         big = widgets.app_icon(72)
@@ -410,6 +412,7 @@ class MainWindow(VoicesUI):
         self._render_tasks(result)
         self._render_transcript(wav)
         self.render_voices(wav)
+        self.render_chat()
 
     @staticmethod
     def _mtime(path):
@@ -1234,6 +1237,7 @@ class MainWindow(VoicesUI):
         self.status.restyle(self.pal)
         self.work.restyle(self.pal)
         self.records_tree.set_pal(self.pal)
+        self.chat_restyle()
         self.action_bar.configure(bg=self.pal["select"])
         self.action_text.configure(bg=self.pal["select"], fg=self.pal["select_fg"], font=(theme.FONT, 10))
         if getattr(self, "_placeholder", False):
