@@ -19,15 +19,23 @@ data = Path(tempfile.mkdtemp(prefix="mh_code_"))
 env = dict(os.environ, MEETINGHUB_DATA=str(data))
 
 
+def fail(msg, **ctx):
+    text = msg + " | " + json.dumps(ctx, ensure_ascii=False)
+    print(f"::error title=code update test::{text}")
+    raise SystemExit(text)
+
+
 def run():
     info = data / "code_info.json"
     info.unlink(missing_ok=True)
-    subprocess.run([exe, "--code-info"], env=env, timeout=120)
+    proc = subprocess.run([exe, "--code-info"], env=env, timeout=120, capture_output=True)
     end = time.time() + 40                       # при откате запуск продолжает уже новый процесс
     while not info.exists() and time.time() < end:
         time.sleep(0.5)
     if not info.exists():
-        raise SystemExit("exe не записал code_info.json")
+        fail("exe не записал code_info.json", code=proc.returncode, out=proc.stdout[-300:].decode("utf-8", "replace"),
+             err=proc.stderr[-300:].decode("utf-8", "replace"), data=str(data),
+             files=sorted(p.name for p in data.iterdir()))
     return json.loads(info.read_text(encoding="utf-8"))
 
 
@@ -50,24 +58,28 @@ def install(version, runtime=1, broken=False, pending=False, previous="", attemp
 
 base = run()
 print("основа:", base)
-assert base["base_runtime"] and base["base_version"], base
-assert base["version"] == base["base_version"], "без обновления должен работать вшитый код"
-assert str(data) not in base["file"]
+if not (base["base_runtime"] and base["base_version"]):
+    fail("launcher не передал сведения об основе", **base)
+if base["version"] != base["base_version"]:
+    fail("без обновления должен работать вшитый код", **base)
+if str(data) in base["file"]:
+    fail("вшитый код загружен из папки данных", **base)
 
 install("99.0.0")
 now = run()
 print("с обновлением кода:", now)
-assert now["version"] == "99.0.0", "код из папки обновления не подхватился"
-assert str(data / "code" / "99.0.0") in now["file"], now["file"]
+if now["version"] != "99.0.0" or str(data / "code" / "99.0.0") not in now["file"]:
+    fail("код из папки обновления не подхватился", **now)
 
 install("99.0.1", broken=True, pending=True, previous="99.0.0")
-assert (data / "code" / "99.0.0").exists()          # прежняя версия на месте
 after = run()
 print("после битого обновления:", after)
-assert after["version"] == "99.0.0", "битое обновление не откатилось на предыдущее"
+if after["version"] != "99.0.0":
+    fail("битое обновление не откатилось на предыдущее", **after)
 
 install("99.0.2", runtime=int(base["base_runtime"]) + 5)
 skipped = run()
 print("обновление требует новой основы:", skipped)
-assert skipped["version"] == base["base_version"], "обновление с чужим runtime не должно применяться"
+if skipped["version"] != base["base_version"]:
+    fail("обновление с чужим runtime не должно применяться", **skipped)
 print("OK")
