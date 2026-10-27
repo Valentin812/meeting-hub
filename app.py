@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.6.1"
+APP_VERSION = "7.7.0"
 
 import support
 from support import app_dir, data_dir
@@ -1274,7 +1274,11 @@ class App(MainWindow):
     def show_window(self):
         try:
             self.root.deiconify()
+            self.root.state("normal")
             self.root.lift()
+            # Windows не отдаёт фокус окну, которое просит его из фона, — на миг делаем окно «поверх всех».
+            self.root.attributes("-topmost", True)
+            self.root.after(250, lambda: self.root.attributes("-topmost", False))
             self.root.focus_force()
         except tk.TclError:
             pass
@@ -1452,6 +1456,11 @@ class App(MainWindow):
         except OSError as e:
             self.log.warning("summary not saved: %s", e)
             return
+        try:
+            import importer
+            importer.auto_name(src, result)
+        except Exception:
+            self.log.exception("Название встречи не записано")
         self.make_protocol(src, notify="Итоги встречи готовы")
         self.last_event_text = ""
         self.refresh_records()

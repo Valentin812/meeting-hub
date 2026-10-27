@@ -25,6 +25,8 @@ SYSTEM_PROMPT = """Ты — помощник по протоколировани
 - open_questions: вопросы, которые остались без ответа или требуют уточнения.
 Верни строго JSON без markdown и без текста вокруг, по схеме:
 {
+ "title": "название встречи по сути, 3–7 слов, без кавычек и точки",
+ "description": "1–2 предложения: о чём была встреча",
  "summary": ["..."],
  "decisions": [{"text":"...", "evidence":"дословный короткий фрагмент"}],
  "tasks": [{"task":"...", "owner":"", "deadline":"", "evidence":"дословный короткий фрагмент", "confidence":"high|medium|low"}],
@@ -43,7 +45,8 @@ SYSTEM_PROMPT = """Ты — помощник по протоколировани
 MERGE_PROMPT = """Ты — помощник по протоколированию встреч на русском языке.
 Тебе дали краткие резюме последовательных частей одной встречи. Объедини их в итоговое резюме:
 5–8 коротких пунктов без повторов, только факты из переданных резюме, ничего не выдумывай.
-Верни строго JSON без markdown: {"summary": ["..."]}
+Также придумай название встречи по сути (3–7 слов, без кавычек и точки) и описание в 1–2 предложения.
+Верни строго JSON без markdown: {"title": "...", "description": "...", "summary": ["..."]}
 """
 
 
@@ -121,8 +124,27 @@ def _norm(s):
     return re.sub(r"[\W_]+", " ", str(s).lower()).strip()
 
 
+def clean_title(text, limit=70):
+    t = re.sub(r"\s+", " ", str(text or "")).strip().strip("\"'«»“”„ ").rstrip(".!")
+    if t.lower() in ("название встречи", "встреча", "без названия", "..."):
+        return ""
+    return (t[:limit].rsplit(" ", 1)[0] if len(t) > limit else t).strip()
+
+
+def clean_description(text, limit=260):
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if t in ("...", "описание"):
+        return ""
+    if len(t) > limit:
+        t = t[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return t
+
+
 def merge_results(parts):
-    out = {"summary": [], **{k: [] for k in LISTS}}
+    out = {"title": "", "description": "", "summary": [], **{k: [] for k in LISTS}}
+    for p in parts:
+        out["title"] = out["title"] or clean_title(p.get("title"))
+        out["description"] = out["description"] or clean_description(p.get("description"))
     seen = {k: set() for k in LISTS}
     for p in parts:
         for line in p.get("summary") or []:
@@ -159,6 +181,8 @@ def analyze_transcript(transcript, llm, cancel_event=None, progress=None):
             final = llm(MERGE_PROMPT, "РЕЗЮМЕ ЧАСТЕЙ:\n" + "\n".join(bullets))
             if final.get("summary"):
                 merged["summary"] = [str(x) for x in final["summary"]]
+            merged["title"] = clean_title(final.get("title")) or merged["title"]
+            merged["description"] = clean_description(final.get("description")) or merged["description"]
         except Cancelled:
             raise
         except Exception:

@@ -229,6 +229,39 @@ def cluster(embs, threshold=SAME_VOICE):
     return [int(k) for k in np.argmax(X @ C.T, axis=1)]
 
 
+def cluster_k(embs, k):
+    """Ровно k голосов (сферический k-means с несколькими запусками). Для случая «я знаю, сколько было людей»."""
+    n = len(embs)
+    if n == 0:
+        return []
+    k = max(1, min(int(k), n))
+    X = np.stack(embs)
+    rng = np.random.default_rng(7)
+    best_labels, best_score = None, -1e9
+    for _ in range(8):
+        cents = [X[int(rng.integers(n))]]
+        while len(cents) < k:                                   # k-means++: далёкие от уже выбранных центров
+            d = 1.0 - np.max(X @ np.stack(cents).T, axis=1)
+            p = np.maximum(d, 1e-9) ** 2
+            cents.append(X[int(rng.choice(n, p=p / p.sum()))])
+        C = np.stack(cents)
+        for _it in range(30):
+            labels = np.argmax(X @ C.T, axis=1)
+            newC = C.copy()
+            for j in range(k):
+                idx = np.where(labels == j)[0]
+                if len(idx):
+                    newC[j] = _unit(X[idx].mean(axis=0))
+            if np.allclose(newC, C):
+                break
+            C = newC
+        labels = np.argmax(X @ C.T, axis=1)
+        score = float(np.sum(np.max(X @ C.T, axis=1)))
+        if score > best_score:
+            best_labels, best_score = labels, score
+    return [int(x) for x in best_labels]
+
+
 # ---------------------------------------------------------------------------
 # Разбор встречи
 # ---------------------------------------------------------------------------
@@ -269,8 +302,11 @@ def _windows(seg):
     return [(start + k * step, start + (k + 1) * step) for k in range(n)]
 
 
-def analyze(wav, embedder, profiles, progress=None, should_stop=None):
-    """Найти голоса в расшифровке встречи, подписать известные. Возвращает данные speakers.json."""
+def analyze(wav, embedder, profiles, progress=None, should_stop=None, speakers=None):
+    """Найти голоса в расшифровке встречи, подписать известные. Возвращает данные speakers.json.
+
+    speakers — сколько собеседников было на самом деле (если известно): тогда голосов будет ровно столько.
+    """
     wav = Path(wav)
     js = tr.output_paths(wav)[1]
     data = json.loads(js.read_text(encoding="utf-8"))
@@ -289,7 +325,8 @@ def analyze(wav, embedder, profiles, progress=None, should_stop=None):
                 items.append((i, a, b, v))
         if progress is not None and todo:
             progress((n + 1) / len(todo))
-    labels = cluster([it[3] for it in items])
+    vecs = [it[3] for it in items]
+    labels = cluster_k(vecs, speakers) if speakers else cluster(vecs)
     groups = {}
     for it, lab in zip(items, labels):
         groups.setdefault(lab, []).append(it)
@@ -297,7 +334,7 @@ def analyze(wav, embedder, profiles, progress=None, should_stop=None):
     order = sorted(groups.values(), key=lambda g: -sum(b - a for _i, a, b, _v in g))
     for g in order:
         total = sum(b - a for _i, a, b, _v in g)
-        if total < MIN_VOICE_SEC:
+        if total < MIN_VOICE_SEC and not speakers:
             continue                                           # случайные короткие обрывки — не голос
         cid = len(clusters) + 1
         cent = _unit(np.mean([v for *_x, v in g], axis=0))
@@ -318,7 +355,7 @@ def analyze(wav, embedder, profiles, progress=None, should_stop=None):
             seg_votes.setdefault(i, {}).setdefault(cid, 0.0)
             seg_votes[i][cid] += b - a
     assign = {str(i): max(v, key=v.get) for i, v in seg_votes.items()}
-    result = {"model": MODEL_NAME, "clusters": clusters, "assign": assign}
+    result = {"model": MODEL_NAME, "clusters": clusters, "assign": assign, "speakers": speakers or 0}
     _write_json(speakers_path(wav), result)
     apply_names(wav)
     return result

@@ -103,3 +103,56 @@ class Analyze(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TitleTests(unittest.TestCase):
+    def test_title_from_single_call_and_cleanup(self):
+        def llm(system, user):
+            return {"title": "«Планёрка по релизу.»", "description": "  Обсудили сроки\nи тесты. ", "summary": ["x"]}
+        r = analyzer.analyze_transcript("[00:00:01] Вы: привет", llm)
+        self.assertEqual(r["title"], "Планёрка по релизу")
+        self.assertEqual(r["description"], "Обсудили сроки и тесты.")
+
+    def test_title_from_merge_step_wins(self):
+        def llm(system, user):
+            if system == analyzer.MERGE_PROMPT:
+                return {"title": "Итоговое название", "description": "Общее описание", "summary": ["общий"]}
+            return {"title": "часть", "summary": ["ч"]}
+        r = analyzer.analyze_transcript(lines(300), llm)
+        self.assertEqual(r["title"], "Итоговое название")
+        self.assertEqual(r["description"], "Общее описание")
+
+    def test_placeholder_titles_dropped_and_limits(self):
+        self.assertEqual(analyzer.clean_title("Название встречи"), "")
+        self.assertEqual(analyzer.clean_title("..."), "")
+        self.assertLessEqual(len(analyzer.clean_title("слово " * 40)), 70)
+        self.assertLessEqual(len(analyzer.clean_description("слово " * 100)), 262)
+
+
+class AutoNameTests(unittest.TestCase):
+    def test_auto_name_respects_user_edits(self):
+        import importer
+        import json
+        import tempfile
+        import shutil
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            wav = tmp / "20261026_100000.wav"
+            meta = wav.with_suffix(".json")
+            meta.write_text(json.dumps({"window": "Room | MRM meet"}), encoding="utf-8")
+            res = {"title": "Планёрка по релизу", "description": "Обсудили сроки."}
+            self.assertTrue(importer.auto_name(wav, res))
+            m = json.loads(meta.read_text(encoding="utf-8"))
+            self.assertEqual((m["title"], m["description"], m["window"]), ("Планёрка по релизу", "Обсудили сроки.",
+                                                                           "Room | MRM meet"))
+            # пользователь поменял название — повторные итоги его не затрут, описание обновится
+            importer.write_meta(wav, {"title": "Моё название", "title_by_user": True})
+            importer.auto_name(wav, {"title": "Другое", "description": "Новое описание."})
+            m = json.loads(meta.read_text(encoding="utf-8"))
+            self.assertEqual((m["title"], m["description"]), ("Моё название", "Новое описание."))
+            importer.write_meta(wav, {"description_by_user": True, "description": "Своё"})
+            self.assertFalse(importer.auto_name(wav, {"title": "Ещё", "description": "Ещё"}))
+            self.assertFalse(importer.auto_name(wav, {}))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

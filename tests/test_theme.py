@@ -46,6 +46,8 @@ class ThemeTests(unittest.TestCase):
         self.assertLess(lum(theme.THEMES["light"]["bg"]), 0.84)         # заметно мягче белого
         self.assertLess(lum(theme.THEMES["light"]["surface"]), 0.93)
         self.assertGreater(lum(theme.THEMES["dark"]["bg"]), 0.025)       # не почти чёрный
+        self.assertLess(lum(theme.THEMES["mac"]["bg"]), 0.84)
+        self.assertLess(lum(theme.THEMES["cappuccino"]["bg"]), 0.045)    # кофейная, заметно темнее
         cap = theme.THEMES["cappuccino"]
         self.assertTrue(int(cap["bg"][1:3], 16) > int(cap["bg"][5:7], 16) + 20, "капучино должно быть тёплым")
 

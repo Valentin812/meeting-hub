@@ -1,5 +1,5 @@
 ; Установщик Meeting Hub (Inno Setup 6).
-; Сборка: ISCC /DAppVer=7.6.1 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
+; Сборка: ISCC /DAppVer=7.7.0 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
 ; Ставится без прав администратора в %LOCALAPPDATA%\Programs\Meeting Hub.
 ; Данные пользователя лежат отдельно в %LOCALAPPDATA%\Meeting Hub и при удалении программы сохраняются.
 
@@ -23,6 +23,7 @@ OutputBaseFilename=MeetingHubSetup-v{#AppVer}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=MeetingHub.ico
 UninstallDisplayIcon={app}\MeetingHub.exe
 UninstallDisplayName=Meeting Hub
 CloseApplications=force
@@ -52,11 +53,12 @@ Source: "..\dist\MeetingHub\*"; DestDir: "{app}"; Flags: recursesubdirs createal
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "setup_ollama.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "MeetingHub.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"
+Name: "{autoprograms}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"; IconFilename: "{app}\MeetingHub.ico"
 Name: "{autoprograms}\Meeting Hub — проверка звука"; Filename: "{app}\MeetingHub.exe"; Parameters: "--audio-check --open"
-Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"; Tasks: desktopicon
+Name: "{autodesktop}\Meeting Hub"; Filename: "{app}\MeetingHub.exe"; IconFilename: "{app}\MeetingHub.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\MeetingHub.exe"; Description: "Запустить Meeting Hub"; Flags: nowait postinstall skipifsilent

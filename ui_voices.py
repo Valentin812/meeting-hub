@@ -25,7 +25,7 @@ class VoicesUI:
     def voice_busy(self):
         return bool(getattr(self, "voice_jobs", None))
 
-    def run_voices(self, wav, then=None, manual=False):
+    def run_voices(self, wav, then=None, manual=False, speakers=None):
         """Определить голоса встречи. then() вызывается в потоке интерфейса в любом случае."""
         wav = Path(wav)
         jobs = self.__dict__.setdefault("voice_jobs", set())
@@ -68,7 +68,7 @@ class VoicesUI:
                 emb = getattr(self, "_embedder", None)
                 if emb is None:
                     emb = self._embedder = voices.Embedder(voices.model_path(data_dir))
-                result = voices.analyze(wav, emb, profiles)
+                result = voices.analyze(wav, emb, profiles, speakers=speakers)
                 err = ""
             except Exception as e:
                 self.log.exception("Голоса")
@@ -111,12 +111,12 @@ class VoicesUI:
             else:
                 ttk.Button(tab, text="Определить голоса", style="Accent.TButton",
                            command=lambda: self.run_voices(wav, manual=True)).pack(anchor="w")
+                self._count_row(tab, wav, None, "Определить")
             return
         clusters = sp.get("clusters") or []
         if not clusters:
             note("Отдельных голосов не найдено: участники говорили слишком коротко или звук один.")
-            ttk.Button(tab, text="Определить заново", command=lambda: self.run_voices(wav, manual=True)).pack(
-                anchor="w")
+            self._count_row(tab, wav, sp, "Определить заново")
             return
         note("Нажмите ▶, чтобы послушать отрывок, и впишите имя. «Вы» — это ваш микрофон, он подписан сам.")
         names = self.voice_profiles().names()
@@ -147,10 +147,33 @@ class VoicesUI:
                    command=lambda: self.save_voice_names(wav)).pack(side="left")
         ttk.Button(bar, text="Подписать по известным", command=lambda: self.rematch_voices(wav)).pack(
             side="left", padx=(8, 0))
-        ttk.Button(bar, text="Определить заново", command=lambda: self.redo_voices(wav)).pack(
-            side="left", padx=(8, 0))
+        self._count_row(tab, wav, sp, "Определить заново")
+        found = len(clusters)
+        ttk.Label(tab, text=f"Найдено голосов: {found}. Если людей было больше или меньше — укажите число и "
+                  "нажмите «Определить заново». Один человек может оказаться двумя голосами: впишите обоим одно имя.",
+                  style="Small.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(6, 0))
         if not wav.exists():
             note("Аудио удалено — отрывки недоступны, но имена записать можно.", "Small.TLabel")
+
+    def _count_row(self, parent, wav, sp, button_text):
+        """«Сколько было собеседников?» — если автоматика ошиблась, число можно задать вручную."""
+        row = ttk.Frame(parent)
+        row.pack(anchor="w", pady=(10, 0))
+        ttk.Label(row, text="Сколько было собеседников (кроме вас)?").pack(side="left")
+        cur = int((sp or {}).get("speakers") or 0)
+        var = tk.StringVar(value=str(cur) if cur else "авто")
+        ttk.Combobox(row, textvariable=var, values=["авто"] + [str(i) for i in range(1, 11)], width=6,
+                     state="readonly").pack(side="left", padx=8)
+
+        def go():
+            n = int(var.get()) if var.get().isdigit() else None
+            if sp is not None and not messagebox.askyesno(
+                    "Голоса", "Определить голоса заново? Имена, которые вы уже подписали, вернутся сами "
+                    "там, где голос узнаётся; остальные придётся вписать снова.", parent=self.root):
+                return
+            self.run_voices(Path(wav), manual=True, speakers=n)
+        ttk.Button(row, text=button_text, command=go).pack(side="left")
+        return row
 
     def play_clip(self, wav, clip):
         wav = Path(wav)
@@ -214,12 +237,6 @@ class VoicesUI:
     def rematch_voices(self, wav):
         voices.rematch(wav, self.voice_profiles())
         self._voices_changed(Path(wav))
-
-    def redo_voices(self, wav):
-        if not messagebox.askyesno("Голоса", "Определить голоса заново? Записанные в этой встрече имена "
-                                   "сбросятся (сохранённые голоса людей останутся).", parent=self.root):
-            return
-        self.run_voices(Path(wav), manual=True)
 
     # ------------------------------------------------------------------
     # Известные голоса (в настройках)

@@ -26,6 +26,34 @@ def make_image(recording=False, size=64):
     return img
 
 
+def make_app_icon(size=256):
+    """Значок программы для ярлыков и exe: синий градиент, белая «M». Рисуется крупно и уменьшается."""
+    from PIL import Image, ImageDraw
+    big = size * 4
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    grad = Image.new("RGBA", (big, big))
+    gd = ImageDraw.Draw(grad)
+    top, bottom = (52, 130, 232), (20, 70, 150)
+    for y in range(big):
+        t = y / (big - 1)
+        gd.line([(0, y), (big, y)], fill=tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)) + (255,))
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((big * .03, big * .03, big * .97, big * .97), radius=big * .22, fill=255)
+    img.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(img)
+    w = big
+    pts = [(w * .24, w * .72), (w * .24, w * .30), (w * .5, w * .55), (w * .76, w * .30), (w * .76, w * .72)]
+    d.line(pts, fill=(255, 255, 255, 255), width=int(w * .1), joint="curve")
+    for x, y in (pts[0], pts[1], pts[3], pts[4]):
+        r = w * .05
+        d.ellipse((x - r, y - r, x + r, y + r), fill=(255, 255, 255, 255))
+    # три «звуковые» точки под буквой — намёк на запись голоса
+    for k, x in enumerate((.38, .5, .62)):
+        r = w * (.028 if k != 1 else .035)
+        d.ellipse((w * x - r, w * .83 - r, w * x + r, w * .83 + r), fill=(190, 220, 255, 255))
+    return img.resize((size, size), Image.LANCZOS)
+
+
 class Tray:
     """Колбэки вызываются из потока значка — приложение само переносит их в поток интерфейса."""
 

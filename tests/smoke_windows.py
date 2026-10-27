@@ -217,7 +217,7 @@ def check_ui():
         assert app.d_title.cget("text"), "пустой заголовок встречи"
         app.open_settings_dialog()
         root.update()
-        for mode in ("dark", "latte", "cappuccino", "pixel", "win95", "light"):   # смена оформления на лету
+        for mode in ("dark", "latte", "cappuccino", "mac", "mac_dark", "pixel", "win95", "light"):   # смена оформления на лету
             app.apply_theme(mode)
             root.update()
         app.settings_win.destroy()

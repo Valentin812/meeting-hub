@@ -158,3 +158,37 @@ class VoicesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForcedCountTests(unittest.TestCase):
+    def test_cluster_k_splits_similar_voices(self):
+        rng = np.random.default_rng(1)
+        base = np.eye(8, dtype=np.float32)
+        a, b, c = base[0], _mix(base[0], base[1], 0.75), base[4]       # a и b похожи (≈0,8)
+        X = []
+        for v in (a, b, c) * 6:
+            w = v + rng.normal(0, 0.03, 8).astype(np.float32)
+            X.append(w / np.linalg.norm(w))
+        auto = voices.cluster(X)
+        self.assertEqual(len(set(auto)), 2)                               # автоматика склеила a и b
+        forced = voices.cluster_k(X, 3)
+        self.assertEqual(len(set(forced)), 3)
+        self.assertEqual(forced[0::3], [forced[0]] * 6)                   # a всегда в одном голосе
+        self.assertNotEqual(forced[0], forced[1])
+        self.assertEqual(len(set(voices.cluster_k(X, 1))), 1)
+        self.assertEqual(len(set(voices.cluster_k(X[:2], 5))), 2)         # не больше, чем векторов
+
+    def test_analyze_with_forced_count(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            wav = make_meeting(tmp / "r", [("A", 6), ("B", 6), ("C", 6), ("A", 5)])
+            sp = voices.analyze(wav, FakeEmbedder(), voices.Profiles(tmp / "v.json"), speakers=3)
+            self.assertEqual(len(sp["clusters"]), 3)
+            self.assertEqual(sp["speakers"], 3)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _mix(u, v, w):
+    r = w * u + (1 - w * w) ** 0.5 * v
+    return r / np.linalg.norm(r)

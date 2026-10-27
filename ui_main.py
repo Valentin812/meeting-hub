@@ -856,6 +856,10 @@ class MainWindow(VoicesUI):
 
         def save():
             fields = {"title": title.get().strip(), "description": desc.get("1.0", "end").strip()}
+            if fields["title"] != meeting_title({"path": wav, **meta}):
+                fields["title_by_user"], fields["title_auto"] = True, False        # своё название ИИ не трогает
+            if fields["description"] != (meta.get("description") or "").strip():
+                fields["description_by_user"], fields["description_auto"] = True, False
             win.destroy()
             importer.write_meta(wav, fields)
             for ext in (".protocol.html", ".protocol.docx"):
