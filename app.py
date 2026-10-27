@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.5.1"
+APP_VERSION = "7.5.2"
 
 import support
 from support import app_dir, data_dir
@@ -818,6 +818,9 @@ class App(MainWindow):
         self.rec_errors_seen = set()
         self._journal_note("Запись начата", reason, initiator, file=rec.stem + ".wav")
         self.last_event_text = "Запись начата. Левый канал — вы, правый — собеседники."
+        if self.tray is not None:
+            self.tray.notify("Идёт запись встречи. Остановить: правая кнопка по значку у часов → «Остановить запись».",
+                             "Meeting Hub: запись")
         self.refresh_status()
 
     def stop_recording(self, reason, initiator="auto", cut_at=None):
@@ -1281,7 +1284,8 @@ class App(MainWindow):
             self.tray = tray_mod.Tray(on_open=lambda: put((self.show_window, ())),
                                       on_record=lambda: put((self.toggle_recording_button, ())),
                                       on_quit=lambda: put((self.quit_app, ())),
-                                      is_recording=lambda: self.recorder is not None).start()
+                                      is_recording=lambda: self.recorder is not None,
+                                      elapsed=lambda: self.recorder.elapsed() if self.recorder else 0.0).start()
         except Exception:
             self.log.exception("Значок в трее не запущен")
             self.tray = None
