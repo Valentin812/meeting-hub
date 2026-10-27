@@ -179,3 +179,25 @@ def is_imported(wav):
         return bool(json.loads(Path(wav).with_suffix(".json").read_text(encoding="utf-8")).get("imported"))
     except (OSError, ValueError):
         return False
+
+
+def auto_name(wav, result):
+    """Название и описание встречи от итогов (если пользователь сам их не менял). Возвращает True, если записали."""
+    title = (result or {}).get("title") or ""
+    desc = (result or {}).get("description") or ""
+    if not title and not desc:
+        return False
+    path = Path(wav).with_suffix(".json")
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    fields = {}
+    if title and not meta.get("title_by_user"):
+        fields["title"], fields["title_auto"] = title, True
+    if desc and not meta.get("description_by_user"):
+        fields["description"], fields["description_auto"] = desc, True
+    if not fields:
+        return False
+    write_meta(wav, fields)
+    return True

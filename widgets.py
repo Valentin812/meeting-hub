@@ -200,7 +200,7 @@ def app_icon(size=64):
     try:
         from PIL import ImageTk
         import tray
-        return ImageTk.PhotoImage(tray.make_image(size=size))
+        return ImageTk.PhotoImage(tray.make_app_icon(size))
     except Exception:
         return None
 

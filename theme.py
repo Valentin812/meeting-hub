@@ -42,12 +42,28 @@ THEMES = {
                     ("#e7d2b8", "#7a4a24"), ("#e5d9c9", "#6d5a4a"))),
     "cappuccino": dict(
         label="Капучино", dark=True, font="Segoe UI", relief="flat",
-        bg="#5a4535", surface="#6a5342", text="#f6ebdd", muted="#e6d6c3", faint="#a99580",
-        border="#85705c", accent="#e3b27c", accent_fg="#3a2a1d", accent_hover="#f0c697",
-        select="#80654f", select_fg="#fff6ea", hover="#6f5846", card="#65503f", btn="#735b49",
+        bg="#45342a", surface="#54402f", text="#f4e8d8", muted="#dccab5", faint="#a89480",
+        border="#6e5948", accent="#e0a96d", accent_fg="#33231a", accent_hover="#efc08b",
+        select="#6a5241", select_fg="#fff6ea", hover="#5a4637", card="#4f3c2d", btn="#614a39",
         me="#ffd29a", they="#b9e0d0",
-        pill=_pills(("#5f6e45", "#e6f4cc"), ("#8c4b41", "#ffdcd2"), ("#8e6e34", "#ffecb8"),
-                    ("#8a6a4f", "#ffe8cb"), ("#6e5a49", "#e8d8c4"))),
+        pill=_pills(("#58673f", "#e6f4cc"), ("#86463d", "#ffdcd2"), ("#876a31", "#ffecb8"),
+                    ("#80614a", "#ffe8cb"), ("#6a5646", "#e8d8c4"))),
+    "mac": dict(
+        label="Mac (светлая)", dark=False, font="Segoe UI", relief="flat",
+        bg="#e6e6eb", surface="#f4f4f6", text="#1d1d1f", muted="#5c5c62", faint="#8e8e93",
+        border="#cdcdd3", accent="#0a64d0", accent_fg="#ffffff", accent_hover="#0852aa",
+        select="#cddff7", select_fg="#1d1d1f", hover="#dadae0", card="#f4f4f6", btn="#fafafc",
+        me="#0a64d0", they="#8944ab",
+        pill=_pills(("#d4ecd6", "#1e6b2c"), ("#f8d9d6", "#b3261e"), ("#f6e6b8", "#6e5200"),
+                    ("#d3e3f8", "#0a5cc0"), ("#dcdce2", "#4b4b52"))),
+    "mac_dark": dict(
+        label="Mac (тёмная)", dark=True, font="Segoe UI", relief="flat",
+        bg="#2b2b30", surface="#36363b", text="#f2f2f7", muted="#b0b0b8", faint="#85858d",
+        border="#4c4c53", accent="#4da3ff", accent_fg="#08203f", accent_hover="#74b6ff",
+        select="#3f5878", select_fg="#ffffff", hover="#3b3b41", card="#34343a", btn="#424248",
+        me="#6cb4ff", they="#d4a8f5",
+        pill=_pills(("#2f4d35", "#a6e3ae"), ("#5c3639", "#ffb3ae"), ("#56482c", "#f5da8e"),
+                    ("#2f4968", "#aad2ff"), ("#45454c", "#d0d0d8"))),
     "pixel": dict(
         label="Пиксель-арт", dark=True, font="Courier New", relief="pixel", bold=True,
         bg="#1a1c2c", surface="#262b44", text="#f4f4f4", muted="#94b0c2", faint="#566c86",
@@ -65,7 +81,7 @@ THEMES = {
         pill=_pills(("#008000", "#ffffff"), ("#c00000", "#ffffff"), ("#ffff00", "#000000"),
                     ("#000080", "#ffffff"), ("#707070", "#ffffff"))),
 }
-ORDER = ["light", "dark", "latte", "cappuccino", "pixel", "win95"]
+ORDER = ["light", "dark", "latte", "cappuccino", "mac", "mac_dark", "pixel", "win95"]
 
 
 def windows_dark():
