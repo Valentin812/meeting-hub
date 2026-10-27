@@ -17,6 +17,65 @@ class SetupError(Exception):
     pass
 
 
+# Лесенка моделей по объёму оперативной памяти: (минимум ГБ ОЗУ, модель, размер загрузки ГБ).
+# Память нужна ещё Windows, браузеру и расшифровке, поэтому берём с запасом.
+LADDER = [(0, "qwen2.5:3b", 1.9), (10, "qwen2.5:7b", 4.7), (31, "qwen2.5:14b", 9.0)]
+
+
+def ram_gb():
+    """Объём оперативной памяти в ГБ или None, если определить не удалось."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class Mem(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
+                            ("avail", ctypes.c_ulonglong), ("tpage", ctypes.c_ulonglong),
+                            ("apage", ctypes.c_ulonglong), ("tvirt", ctypes.c_ulonglong),
+                            ("avirt", ctypes.c_ulonglong), ("ext", ctypes.c_ulonglong)]
+            m = Mem()
+            m.length = ctypes.sizeof(Mem)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return m.total / 1024 ** 3
+        else:
+            with open("/proc/meminfo", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        return int(line.split()[1]) / 1024 ** 2
+    except Exception:
+        pass
+    return None
+
+
+_AUTO = object()
+
+
+def recommend(ram=_AUTO):
+    """(модель, размер загрузки ГБ) для этого компьютера. ram — для проверки; по умолчанию определяется сама."""
+    ram = ram_gb() if ram is _AUTO else ram
+    best = LADDER[0]
+    for row in LADDER:
+        if ram is not None and ram >= row[0]:
+            best = row
+    return best[1], best[2]
+
+
+def rank(model):
+    """Место модели в лесенке (0, 1, 2) или -1, если модель не из неё."""
+    for i, row in enumerate(LADDER):
+        if row[1] == model:
+            return i
+    return -1
+
+
+def upgrade_for(current, ram=_AUTO):
+    """Лучшая модель для компьютера, если она сильнее текущей из лесенки; иначе None."""
+    rec, size = recommend(ram)
+    if rank(current) >= 0 and rank(rec) > rank(current):
+        return rec, size
+    return None
+
+
 def find_exe():
     exe = shutil.which("ollama")
     if exe:
