@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -26,6 +27,12 @@ class Giga(BaseHTTPRequestHandler):
             return self._json(200, {"access_token": "T", "expires_at": 9999999999999})
         req = json.loads(body)
         Giga.seen.append((self.headers.get("Authorization"), req))
+        if Giga.mode.startswith("busy"):                      # busy2: два отказа 429, потом успех
+            left = int(Giga.mode[4:] or 99)
+            if left > 0:
+                Giga.mode = "busy" + str(left - 1) if left < 99 else Giga.mode
+                return self._json(429, {"message": "Too Many Requests"})
+            Giga.mode = "ok"
         if Giga.mode == "fail":
             return self._json(402, {"message": "Payment Required"})
         if req.get("stream"):
@@ -72,6 +79,53 @@ class ClientTests(unittest.TestCase):
         Giga.mode = "fail"
         with self.assertRaises(SaluteError):
             self.client.complete([{"role": "user", "content": "hi"}])
+
+
+class QueueTests(unittest.TestCase):
+    def setUp(self):
+        Giga.mode, Giga.seen = "ok", []
+        self.srv, self.client = start()
+        self.client.retry_delays = (0.01, 0.01, 0.01)
+
+    def tearDown(self):
+        self.srv.shutdown()
+
+    def test_retries_when_busy(self):
+        Giga.mode = "busy2"
+        text = self.client.complete([{"role": "user", "content": "hi"}])
+        self.assertIn("summary", text)
+        self.assertEqual(len(Giga.seen), 3)                     # два отказа и успех
+
+    def test_gives_up_after_retries(self):
+        Giga.mode = "busy"
+        with self.assertRaises(SaluteError):
+            self.client.complete([{"role": "user", "content": "hi"}])
+        self.assertEqual(len(Giga.seen), 4)                     # 1 + 3 повтора
+
+    def test_other_errors_not_retried(self):
+        Giga.mode = "fail"
+        with self.assertRaises(SaluteError):
+            self.client.complete([{"role": "user", "content": "hi"}])
+        self.assertEqual(len(Giga.seen), 1)
+
+    def test_requests_are_serialized(self):
+        active, peak = [0], [0]
+        orig = self.client._complete
+
+        def slow(*a):
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            time.sleep(0.1)
+            try:
+                return orig(*a)
+            finally:
+                active[0] -= 1
+        self.client._complete = slow
+        threads = [threading.Thread(target=lambda: self.client.complete([{"role": "user", "content": "q"}]))
+                   for _ in range(3)]
+        [x.start() for x in threads]
+        [x.join() for x in threads]
+        self.assertEqual(peak[0], 1)
 
 
 class RouterTests(unittest.TestCase):
