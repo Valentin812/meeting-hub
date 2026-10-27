@@ -55,7 +55,8 @@ class ChatUI:
 
     # ---- журнал
     def _chat_key(self):
-        return str(self.selected) if self.selected is not None else ""
+        sel = getattr(self, "selected", None)
+        return str(sel) if sel is not None else ""
 
     def _chat_write(self, text, tag=None):
         self.chat_log.config(state="normal")
