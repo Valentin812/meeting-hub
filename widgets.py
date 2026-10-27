@@ -24,6 +24,11 @@ class Pill(tk.Canvas):
         self.pal = pal
         self._last = None
 
+    def restyle(self, pal):
+        self.pal = pal
+        self.font.configure(family=theme.FONT)
+        self._last = None
+
     def set(self, text, bg, fg, outer=None):
         if outer:
             self.configure(bg=outer)
@@ -91,6 +96,8 @@ class MeetingList(ttk.Frame):
     def set_pal(self, pal):
         self.pal = pal
         self._structure = None
+        for f in (self.title_font, self.small_font, self.day_font):
+            f.configure(family=theme.FONT)
 
     def set_rows(self, rows):
         structure = [(r["day"], r["iid"]) for r in rows]
@@ -156,6 +163,8 @@ class MeetingList(ttk.Frame):
         bg = pal["select"] if sel else (pal["hover"] if w["hover"] else pal["bg"])
         for key in ("card", "body", "title", "info"):
             w[key].configure(bg=bg)
+        w["title"].configure(fg=pal["select_fg"] if sel else pal["text"])
+        w["info"].configure(fg=pal["select_fg"] if sel else pal["muted"])
         w["bar"].configure(bg=pal["accent"] if sel else bg)
 
     def _paint_all(self):

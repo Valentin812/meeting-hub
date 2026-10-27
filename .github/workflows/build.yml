@@ -202,7 +202,7 @@ jobs:
           if (-not (Get-ChildItem "$data\meeting_hub_training.v4-backup-*.json")) { throw "v4.9 data was not migrated" }
           Write-Output "::notice title=exe gui::started; old data imported into the profile and migrated"
 
-      - name: Screenshots of the main window (light and dark) with demo meetings
+      - name: Screenshots of the main window (all themes) with demo meetings
         timeout-minutes: 4
         shell: pwsh
         run: |
@@ -212,7 +212,7 @@ jobs:
           Copy-Item tests\data\demo\* "$data\recordings\" -Force
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           New-Item -ItemType Directory -Force shots | Out-Null
-          foreach ($mode in "light", "dark") {
+          foreach ($mode in "light", "dark", "latte", "cappuccino", "pixel", "win95") {
             $settings = @{ first_run_done = $true; recording_consent = $true; theme = $mode; check_updates = $false; last_selected = "20261026_100500" } | ConvertTo-Json
             [IO.File]::WriteAllText("$data\meeting_hub_settings.json", $settings, [Text.UTF8Encoding]::new($false))
             $p = Start-Process -FilePath "$app\MeetingHub.exe" -PassThru
