@@ -50,17 +50,17 @@ THEMES = {
                     ("#80614a", "#ffe8cb"), ("#6a5646", "#e8d8c4"))),
     "mac": dict(
         label="Mac (светлая)", dark=False, font="Segoe UI", relief="flat",
-        bg="#e6e6eb", surface="#f4f4f6", text="#1d1d1f", muted="#5c5c62", faint="#8e8e93",
-        border="#cdcdd3", accent="#0a64d0", accent_fg="#ffffff", accent_hover="#0852aa",
-        select="#cddff7", select_fg="#1d1d1f", hover="#dadae0", card="#f4f4f6", btn="#fafafc",
+        bg="#f6f6f8", surface="#ffffff", text="#1d1d1f", muted="#5c5c62", faint="#8e8e93",
+        sidebar="#dcdde3", border="#c9c9d0", accent="#0a64d0", accent_fg="#ffffff", accent_hover="#0852aa",
+        select="#0a64d0", select_fg="#ffffff", hover="#cfd0d8", card="#ffffff", btn="#ffffff",
         me="#0a64d0", they="#8944ab",
         pill=_pills(("#d4ecd6", "#1e6b2c"), ("#f8d9d6", "#b3261e"), ("#f6e6b8", "#6e5200"),
                     ("#d3e3f8", "#0a5cc0"), ("#dcdce2", "#4b4b52"))),
     "mac_dark": dict(
         label="Mac (тёмная)", dark=True, font="Segoe UI", relief="flat",
-        bg="#2b2b30", surface="#36363b", text="#f2f2f7", muted="#b0b0b8", faint="#85858d",
-        border="#4c4c53", accent="#4da3ff", accent_fg="#08203f", accent_hover="#74b6ff",
-        select="#3f5878", select_fg="#ffffff", hover="#3b3b41", card="#34343a", btn="#424248",
+        bg="#262629", surface="#303034", text="#f2f2f7", muted="#b0b0b8", faint="#85858d",
+        sidebar="#1c1c1f", border="#46464c", accent="#0a6fe0", accent_fg="#ffffff", accent_hover="#3b8df0",
+        select="#0a6fe0", select_fg="#ffffff", hover="#2c2c30", card="#303034", btn="#3d3d42",
         me="#6cb4ff", they="#d4a8f5",
         pill=_pills(("#2f4d35", "#a6e3ae"), ("#5c3639", "#ffb3ae"), ("#56482c", "#f5da8e"),
                     ("#2f4968", "#aad2ff"), ("#45454c", "#d0d0d8"))),
@@ -118,7 +118,10 @@ def _configure_ttk(st, pal):
                  darkcolor=dark3, troughcolor=pal["hover"], focuscolor=bg, selectbackground=pal["select"],
                  selectforeground=pal["select_fg"], insertcolor=tx, font=(f, 10, bold))
     st.configure("TFrame", background=bg)
+    side = pal.get("sidebar", bg)
     st.configure("TLabel", background=bg, foreground=tx)
+    st.configure("Side.TFrame", background=side)
+    st.configure("Side.Small.TLabel", background=side, foreground=pal["muted"], font=(f, 9, bold))
     st.configure("Title.TLabel", font=(f, 15, "bold"))
     st.configure("H2.TLabel", font=(f, 13, "bold"))
     st.configure("Muted.TLabel", foreground=pal["muted"])

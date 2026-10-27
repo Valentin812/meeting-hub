@@ -181,3 +181,13 @@ def search(folder, query):
         if all(w in text for w in words):
             found.add(stem)
     return found
+
+
+def update_offer(version, settings, now, busy):
+    """Что делать с найденным обновлением: "show" — предложить сейчас, "wait" — занят, спросим позже,
+    "hide" — пропущено или отложено пользователем (кнопка «Обновить» остаётся в окне)."""
+    if settings.get("skip_version") == version:
+        return "hide"
+    if float(settings.get("update_snooze_until", 0) or 0) > now and settings.get("update_snooze_version") == version:
+        return "hide"
+    return "wait" if busy else "show"

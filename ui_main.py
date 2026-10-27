@@ -118,6 +118,8 @@ class MainWindow(VoicesUI):
         self.rec_btn = ttk.Button(header, text="●  Записать", style="Accent.TButton",
                                   command=self.toggle_recording_button)
         self.rec_btn.pack(side="right", padx=(0, 8))
+        self.update_btn = ttk.Button(header, text="", command=lambda: self.install_found_update())
+        self._header = header
         self.substatus = ttk.Label(root, text="", style="Small.TLabel", padding=(18, 0, 18, 10))
         self.substatus.pack(fill="x")
         ttk.Separator(root).pack(fill="x")
@@ -126,9 +128,9 @@ class MainWindow(VoicesUI):
         body.pack(fill="both", expand=True)
 
         # Слева — встречи
-        left = ttk.Frame(body, padding=(12, 12, 6, 12), width=400)
+        left = ttk.Frame(body, padding=(12, 12, 6, 12), width=400, style="Side.TFrame")
         body.add(left, weight=0)
-        top = ttk.Frame(left)
+        top = ttk.Frame(left, style="Side.TFrame")
         top.pack(fill="x", pady=(0, 8))
         self.add_btn = ttk.Button(top, text="＋ Файл", command=self.add_files)
         self.add_btn.pack(side="right", padx=(6, 0))
@@ -143,7 +145,7 @@ class MainWindow(VoicesUI):
         self.records_tree = widgets.MeetingList(left, pal, on_select=self.on_meeting_selected,
                                                 on_open=lambda _i: self.open_protocol())
         self.records_tree.pack(fill="both", expand=True)
-        self.list_hint = ttk.Label(left, text="", style="Small.TLabel", wraplength=330, justify="left")
+        self.list_hint = ttk.Label(left, text="", style="Side.Small.TLabel", wraplength=330, justify="left")
         self.list_hint.pack(fill="x", pady=(6, 0))
 
         # Справа — встреча
@@ -262,6 +264,13 @@ class MainWindow(VoicesUI):
             self.search_entry.configure(style=style)
         except tk.TclError:
             pass
+
+    def show_update_button(self, version):
+        self.update_btn.config(text=f"⬆  Обновить до {version}")
+        self.update_btn.pack(side="right", padx=(0, 8), before=self.rec_btn)
+
+    def hide_update_button(self):
+        self.update_btn.pack_forget()
 
     def search_query(self):
         return "" if getattr(self, "_placeholder", False) else self.search_var.get().strip()
