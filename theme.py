@@ -1,25 +1,71 @@
 # -*- coding: utf-8 -*-
-"""Оформление: тема Sun Valley (как Windows 11), светлая или тёмная — как в системе.
+"""Оформление: несколько готовых тем. Все строятся на одной основе (ttk «clam») и палитре,
+поэтому цвета, шрифты и рамки полностью наши и одинаково работают на любой Windows.
 
-Без sv_ttk программа выглядит по-старому, но работает.
+Темы: светлая и тёмная (мягкие, без белого и без чёрного), латте, капучино (кофейная),
+пиксель-арт, Windows 95. «Как в Windows» выбирает светлую или тёмную по настройке системы.
 """
 import os
 
-LIGHT = {
-    "bg": "#fafafa", "surface": "#ffffff", "text": "#1c1c1c", "muted": "#616161", "faint": "#8a8a8a",
-    "border": "#e5e5e5", "accent": "#005fb8", "select": "#e5f0fb", "hover": "#f0f0f0", "card": "#ffffff",
-    "me": "#005fb8", "they": "#7a3db8",
-    "pill": {"ok": ("#dff6dd", "#0e700e"), "rec": ("#fde7e9", "#c42b1c"), "busy": ("#fff4ce", "#7a5a00"),
-             "meet": ("#e8f1fb", "#005fb8"), "off": ("#ededed", "#5c5c5c")},
+FONT = "Segoe UI"            # меняется вместе с темой (apply)
+MONO = "Consolas"
+
+
+def _pills(ok, rec, busy, meet, off):
+    return {"ok": ok, "rec": rec, "busy": busy, "meet": meet, "off": off}
+
+
+THEMES = {
+    "light": dict(
+        label="Светлая", dark=False, font="Segoe UI", relief="flat",
+        bg="#e3e8ee", surface="#f1f4f7", text="#1f2933", muted="#556070", faint="#8591a0",
+        border="#c9d1db", accent="#2f6fb3", accent_fg="#ffffff", accent_hover="#255c97",
+        select="#cfdff1", select_fg="#1f2933", hover="#d7dee6", card="#f1f4f7", btn="#f1f4f7",
+        me="#2f6fb3", they="#7a4aa8",
+        pill=_pills(("#d3ecd0", "#1d6b1a"), ("#f6d6d8", "#b3261e"), ("#f3e4b3", "#6e5200"),
+                    ("#d3e2f3", "#1f5a99"), ("#dbe0e6", "#4b5563"))),
+    "dark": dict(
+        label="Тёмная", dark=True, font="Segoe UI", relief="flat",
+        bg="#2b303a", surface="#343a46", text="#e6e9ee", muted="#aab2bf", faint="#7f8896",
+        border="#4a5260", accent="#6cb6ff", accent_fg="#10243a", accent_hover="#8cc7ff",
+        select="#3f5670", select_fg="#ffffff", hover="#3b4250", card="#363c49", btn="#3d4452",
+        me="#7cc0ff", they="#d2b0ff",
+        pill=_pills(("#2f4d33", "#a6e3a1"), ("#5c3436", "#ffb0ad"), ("#56472b", "#f5d98a"),
+                    ("#314862", "#a9d1ff"), ("#444b59", "#d0d6df"))),
+    "latte": dict(
+        label="Латте", dark=False, font="Segoe UI", relief="flat",
+        bg="#efe3d3", surface="#f8f0e5", text="#3e2c22", muted="#6f5849", faint="#a28f80",
+        border="#d6c2a8", accent="#9c5f34", accent_fg="#ffffff", accent_hover="#834d27",
+        select="#e7d2b8", select_fg="#3e2c22", hover="#e6d6c2", card="#f8f0e5", btn="#f8f0e5",
+        me="#8a4b1f", they="#2f6b6b",
+        pill=_pills(("#dbe8cd", "#3d6b2a"), ("#f1cfc6", "#a3321f"), ("#f3e0b0", "#74540c"),
+                    ("#e7d2b8", "#7a4a24"), ("#e5d9c9", "#6d5a4a"))),
+    "cappuccino": dict(
+        label="Капучино", dark=True, font="Segoe UI", relief="flat",
+        bg="#5a4535", surface="#6a5342", text="#f6ebdd", muted="#e6d6c3", faint="#a99580",
+        border="#85705c", accent="#e3b27c", accent_fg="#3a2a1d", accent_hover="#f0c697",
+        select="#80654f", select_fg="#fff6ea", hover="#6f5846", card="#65503f", btn="#735b49",
+        me="#ffd29a", they="#b9e0d0",
+        pill=_pills(("#5f6e45", "#e6f4cc"), ("#8c4b41", "#ffdcd2"), ("#8e6e34", "#ffecb8"),
+                    ("#8a6a4f", "#ffe8cb"), ("#6e5a49", "#e8d8c4"))),
+    "pixel": dict(
+        label="Пиксель-арт", dark=True, font="Courier New", relief="pixel", bold=True,
+        bg="#1a1c2c", surface="#262b44", text="#f4f4f4", muted="#94b0c2", faint="#566c86",
+        border="#566c86", accent="#ffcd75", accent_fg="#1a1c2c", accent_hover="#ffe0a3",
+        select="#3b5dc9", select_fg="#f4f4f4", hover="#333c57", card="#262b44", btn="#333c57",
+        me="#73eff7", they="#ffcd75",
+        pill=_pills(("#257179", "#a7f070"), ("#b13e53", "#f4f4f4"), ("#ef7d57", "#1a1c2c"),
+                    ("#3b5dc9", "#f4f4f4"), ("#333c57", "#94b0c2"))),
+    "win95": dict(
+        label="Windows 95", dark=False, font="Tahoma", relief="win95",
+        bg="#c0c0c0", surface="#ffffff", text="#000000", muted="#404040", faint="#808080",
+        border="#808080", accent="#000080", accent_fg="#ffffff", accent_hover="#1010a0",
+        select="#000080", select_fg="#ffffff", hover="#d4d0c8", card="#ffffff", btn="#c0c0c0",
+        me="#000080", they="#800080",
+        pill=_pills(("#008000", "#ffffff"), ("#c00000", "#ffffff"), ("#ffff00", "#000000"),
+                    ("#000080", "#ffffff"), ("#707070", "#ffffff"))),
 }
-DARK = {
-    "bg": "#1c1c1c", "surface": "#232323", "text": "#f0f0f0", "muted": "#ababab", "faint": "#8a8a8a",
-    "border": "#3a3a3a", "accent": "#60cdff", "select": "#2b3946", "hover": "#2d2d2d", "card": "#272727",
-    "me": "#60cdff", "they": "#d0a8ff",
-    "pill": {"ok": ("#1f3a1f", "#9de09a"), "rec": ("#442726", "#ff9a8f"), "busy": ("#433519", "#fcd571"),
-             "meet": ("#1f3346", "#9ccfff"), "off": ("#333333", "#c8c8c8")},
-}
-FONT = "Segoe UI"
+ORDER = ["light", "dark", "latte", "cappuccino", "pixel", "win95"]
 
 
 def windows_dark():
@@ -34,46 +80,156 @@ def windows_dark():
         return False
 
 
+def resolve(mode):
+    if mode == "system" or mode not in THEMES:
+        return "dark" if windows_dark() else "light"
+    return mode
+
+
+def _configure_ttk(st, pal):
+    f = pal["font"]
+    bold = "bold" if pal.get("bold") else "normal"
+    bg, sf, tx, br = pal["bg"], pal["surface"], pal["text"], pal["border"]
+    kind = pal["relief"]
+    st.theme_use("clam")
+    if kind == "win95":
+        light, dark3, thick, brd = "#ffffff", "#808080", 2, "#000000"
+    elif kind == "pixel":
+        light, dark3, thick, brd = br, br, 2, br
+    else:
+        light, dark3, thick, brd = br, br, 1, br
+    st.configure(".", background=bg, foreground=tx, fieldbackground=sf, bordercolor=brd, lightcolor=light,
+                 darkcolor=dark3, troughcolor=pal["hover"], focuscolor=bg, selectbackground=pal["select"],
+                 selectforeground=pal["select_fg"], insertcolor=tx, font=(f, 10, bold))
+    st.configure("TFrame", background=bg)
+    st.configure("TLabel", background=bg, foreground=tx)
+    st.configure("Title.TLabel", font=(f, 15, "bold"))
+    st.configure("H2.TLabel", font=(f, 13, "bold"))
+    st.configure("Muted.TLabel", foreground=pal["muted"])
+    st.configure("Small.TLabel", foreground=pal["muted"], font=(f, 9, bold))
+    st.configure("TSeparator", background=br)
+    st.configure("TButton", background=pal["btn"], foreground=tx, bordercolor=brd, lightcolor=light,
+                 darkcolor=dark3, borderwidth=thick, relief="raised" if kind == "win95" else "flat",
+                 padding=(12, 6), anchor="center", focuscolor=pal["btn"])
+    st.map("TButton", background=[("pressed", pal["hover"]), ("active", pal["hover"]), ("disabled", bg)],
+           foreground=[("disabled", pal["faint"])],
+           relief=[("pressed", "sunken")] if kind == "win95" else [])
+    st.configure("Accent.TButton", background=pal["accent"], foreground=pal["accent_fg"], bordercolor=pal["accent"]
+                 if kind != "win95" else brd, lightcolor=pal["accent"] if kind != "win95" else light,
+                 darkcolor=pal["accent"] if kind != "win95" else dark3, font=(f, 10, "bold"))
+    st.map("Accent.TButton", background=[("pressed", pal["accent_hover"]), ("active", pal["accent_hover"]),
+                                         ("disabled", pal["hover"])],
+           foreground=[("disabled", pal["faint"])])
+    st.configure("TMenubutton", background=pal["btn"], foreground=tx, bordercolor=brd, lightcolor=light,
+                 darkcolor=dark3, borderwidth=thick, relief="raised" if kind == "win95" else "flat",
+                 padding=(10, 6), arrowcolor=tx)
+    st.map("TMenubutton", background=[("active", pal["hover"])])
+    for name in ("TEntry", "TSpinbox", "TCombobox"):
+        st.configure(name, fieldbackground=sf, foreground=tx, bordercolor=brd, lightcolor=sf if kind != "win95"
+                     else dark3, darkcolor=sf if kind != "win95" else light, padding=6, insertcolor=tx,
+                     arrowcolor=tx, borderwidth=thick, relief="sunken" if kind == "win95" else "flat")
+        st.map(name, bordercolor=[("focus", pal["accent"])] if kind != "win95" else [],
+               fieldbackground=[("readonly", sf), ("disabled", bg)],
+               foreground=[("disabled", pal["faint"])])
+    st.configure("TCheckbutton", background=bg, foreground=tx, indicatorcolor=sf, indicatorbackground=sf,
+                 indicatorforeground=tx)
+    st.map("TCheckbutton", background=[("active", bg)], indicatorcolor=[("selected", pal["accent"])],
+           foreground=[("disabled", pal["faint"])])
+    st.configure("TRadiobutton", background=bg, foreground=tx, indicatorcolor=sf)
+    st.map("TRadiobutton", background=[("active", bg)], indicatorcolor=[("selected", pal["accent"])])
+    st.configure("TNotebook", background=bg, bordercolor=br, lightcolor=bg, darkcolor=bg, tabmargins=(0, 4, 0, 0),
+                 borderwidth=thick)
+    st.configure("TNotebook.Tab", background=pal["hover"], foreground=pal["muted"], padding=(16, 7),
+                 bordercolor=br, lightcolor=pal["hover"], darkcolor=pal["hover"], borderwidth=thick)
+    st.map("TNotebook.Tab", background=[("selected", sf), ("active", pal["select"])],
+           foreground=[("selected", tx), ("active", pal["select_fg"])],
+           lightcolor=[("selected", sf)], darkcolor=[("selected", sf)])
+    st.configure("Treeview", background=sf, fieldbackground=sf, foreground=tx, bordercolor=br, rowheight=30,
+                 font=(f, 10, bold), lightcolor=sf, darkcolor=sf, borderwidth=thick)
+    st.configure("Meetings.Treeview", rowheight=30, font=(f, 10, bold))
+    st.configure("Tasks.Treeview", rowheight=28)
+    st.map("Treeview", background=[("selected", pal["select"])], foreground=[("selected", pal["select_fg"])])
+    st.configure("Treeview.Heading", background=pal["hover"], foreground=tx, relief="flat", padding=(8, 6),
+                 bordercolor=br, lightcolor=pal["hover"], darkcolor=pal["hover"], font=(f, 10, "bold"))
+    st.map("Treeview.Heading", background=[("active", pal["select"])])
+    st.configure("TScrollbar", background=pal["border"] if kind != "win95" else "#c0c0c0", troughcolor=pal["hover"]
+                 if kind != "win95" else "#e0e0e0", bordercolor=bg, arrowcolor=tx, lightcolor=pal["border"]
+                 if kind != "win95" else light, darkcolor=pal["border"] if kind != "win95" else dark3,
+                 relief="flat" if kind != "win95" else "raised", gripcount=0, arrowsize=14)
+    st.map("TScrollbar", background=[("active", pal["muted"])] if kind != "win95" else [])
+    st.configure("TProgressbar", background=pal["accent"], troughcolor=pal["hover"], bordercolor=br,
+                 lightcolor=pal["accent"], darkcolor=pal["accent"], thickness=12)
+    st.configure("TScale", background=bg, troughcolor=pal["hover"], bordercolor=br, lightcolor=pal["accent"],
+                 darkcolor=pal["accent"])
+    st.configure("TPanedwindow", background=bg)
+    st.configure("Sash", background=bg, sashthickness=6)
+    st.configure("TLabelframe", background=bg, bordercolor=br)
+    st.configure("TLabelframe.Label", background=bg, foreground=tx)
+    # Совсем маленькая «растяжка» полосы прокрутки и стрелок — как в стиле темы
+
+
 def apply(root, mode="system"):
-    """Включить тему. mode: system | light | dark. Вернуть палитру."""
-    dark = windows_dark() if mode == "system" else mode == "dark"
-    pal = dict(DARK if dark else LIGHT)
-    pal["dark"] = dark
-    pal["themed"] = False
-    try:
-        import sv_ttk
-        sv_ttk.set_theme("dark" if dark else "light", root)
-        pal["themed"] = True
-    except Exception:
-        pal = dict(LIGHT, dark=False, themed=False)
+    """Включить тему. mode: system | light | dark | latte | cappuccino | pixel | win95. Вернуть палитру."""
+    global FONT
+    name = resolve(mode)
+    pal = dict(THEMES[name])
+    pal["name"], pal["themed"] = name, True
+    FONT = pal["font"]
     from tkinter import ttk
     st = ttk.Style(root)
-    pal["bg"] = st.lookup("TFrame", "background") or pal["bg"]
-    st.configure("Title.TLabel", font=(FONT, 15, "bold"))
-    st.configure("H2.TLabel", font=(FONT, 13, "bold"))
-    st.configure("Muted.TLabel", foreground=pal["muted"])
-    st.configure("Small.TLabel", foreground=pal["muted"], font=(FONT, 9))
-    st.configure("Meetings.Treeview", rowheight=30, font=(FONT, 10))
-    st.configure("Tasks.Treeview", rowheight=28)
-    if not pal["themed"]:
-        st.configure("Accent.TButton", font=(FONT, 10, "bold"))
+    try:
+        _configure_ttk(st, pal)
+    except Exception:
+        pal["themed"] = False
+    try:
+        root.configure(bg=pal["bg"])
+        for opt, val in (("Menu.background", pal["surface"]), ("Menu.foreground", pal["text"]),
+                         ("Menu.activeBackground", pal["select"]), ("Menu.activeForeground", pal["select_fg"]),
+                         ("Menu.relief", "flat"), ("Menu.borderWidth", 1),
+                         ("Toplevel.background", pal["bg"]), ("Listbox.background", pal["surface"]),
+                         ("Listbox.foreground", pal["text"]), ("Text.background", pal["surface"]),
+                         ("Text.foreground", pal["text"]), ("TCombobox*Listbox.background", pal["surface"]),
+                         ("TCombobox*Listbox.foreground", pal["text"]),
+                         ("TCombobox*Listbox.selectBackground", pal["select"]),
+                         ("TCombobox*Listbox.selectForeground", pal["select_fg"])):
+            root.option_add("*" + opt, val)
+        recolor(root, pal)
+    except Exception:
+        pass
     return pal
+
+
+def recolor(widget, pal):
+    """Пройти по уже созданным обычным (не ttk) виджетам: меню и окна."""
+    import tkinter as tk
+    for w in widget.winfo_children():
+        try:
+            if isinstance(w, tk.Menu):
+                w.configure(background=pal["surface"], foreground=pal["text"], activebackground=pal["select"],
+                            activeforeground=pal["select_fg"], font=(pal["font"], 10))
+            elif isinstance(w, tk.Toplevel):
+                w.configure(bg=pal["bg"])
+        except tk.TclError:
+            pass
+        recolor(w, pal)
 
 
 def text_style(widget, pal, size=10):
     """tk.Text под тему: без рамки, с отступами, цветами палитры и тегами разметки."""
-    widget.configure(bg=pal["surface"] if pal["themed"] else "#ffffff", fg=pal["text"], relief="flat",
-                     borderwidth=0, highlightthickness=0, padx=14, pady=10, wrap="word",
-                     font=(FONT, size), insertbackground=pal["text"], spacing1=2, spacing3=4)
-    widget.tag_configure("h", font=(FONT, size + 2, "bold"), spacing1=12, spacing3=4)
+    f = pal["font"]
+    b = "bold"
+    widget.configure(bg=pal["surface"], fg=pal["text"], relief="flat", borderwidth=0, highlightthickness=0,
+                     padx=14, pady=10, wrap="word", font=(f, size), insertbackground=pal["text"], spacing1=2,
+                     spacing3=4, selectbackground=pal["select"], selectforeground=pal["select_fg"])
+    widget.tag_configure("h", font=(f, size + 2, b), spacing1=12, spacing3=4)
     widget.tag_configure("muted", foreground=pal["muted"])
-    widget.tag_configure("time", foreground=pal["faint"], font=(FONT, size - 1))
-    widget.tag_configure("me", foreground=pal["me"], font=(FONT, size, "bold"))
-    widget.tag_configure("they", foreground=pal["they"], font=(FONT, size, "bold"))
+    widget.tag_configure("time", foreground=pal["faint"], font=(f, size - 1))
+    widget.tag_configure("me", foreground=pal["me"], font=(f, size, b))
+    widget.tag_configure("they", foreground=pal["they"], font=(f, size, b))
     widget.tag_configure("bullet", lmargin1=8, lmargin2=24)
-    widget.tag_configure("note", foreground=pal["muted"], font=(FONT, size - 1, "italic"), spacing1=14)
+    widget.tag_configure("note", foreground=pal["muted"], font=(f, size - 1, "italic"), spacing1=14)
     for name, (bg, fg) in pal["pill"].items():
-        widget.tag_configure("chip_" + name, background=bg, foreground=fg, font=(FONT, size - 1, "bold"))
+        widget.tag_configure("chip_" + name, background=bg, foreground=fg, font=(f, size - 1, b))
     widget.tag_configure("chips", spacing1=4, spacing3=6)
-    widget.tag_configure("now", background=pal["select"])
-    widget.tag_configure("lead", font=(FONT, size + 1), spacing3=6, lmargin1=8, lmargin2=8)
+    widget.tag_configure("now", background=pal["select"], foreground=pal["select_fg"])
+    widget.tag_configure("lead", font=(f, size + 1), spacing3=6, lmargin1=8, lmargin2=8)

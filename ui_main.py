@@ -193,7 +193,7 @@ class MainWindow:
         head.bind("<Configure>", rewrap)
 
         self.action_bar = tk.Frame(self.detail, bg=pal["select"], padx=14, pady=10)
-        self.action_text = tk.Label(self.action_bar, text="", bg=pal["select"], fg=pal["text"],
+        self.action_text = tk.Label(self.action_bar, text="", bg=pal["select"], fg=pal["select_fg"],
                                     font=(theme.FONT, 10), anchor="w", justify="left")
         self.action_text.pack(side="left", fill="x", expand=True)
         self.action_btn = ttk.Button(self.action_bar, text="", style="Accent.TButton")
@@ -988,7 +988,7 @@ class MainWindow:
     # ------------------------------------------------------------------
     KEEP_CHOICES = [("всегда", 0), ("7 дней", 7), ("14 дней", 14), ("30 дней", 30), ("90 дней", 90),
                     ("180 дней", 180), ("365 дней", 365)]
-    THEMES = [("как в Windows", "system"), ("светлая", "light"), ("тёмная", "dark")]
+    THEMES = [("как в Windows", "system")] + [(theme.THEMES[k]["label"], k) for k in theme.ORDER]
 
     def open_settings_dialog(self):
         if getattr(self, "settings_win", None) is not None and self.settings_win.winfo_exists():
@@ -1042,8 +1042,20 @@ class MainWindow:
         ttk.Label(row, text="Оформление").pack(side="left")
         theme_var = tk.StringVar(value=dict((v, k) for k, v in self.THEMES).get(s.get("theme", "system"),
                                                                                 "как в Windows"))
-        ttk.Combobox(row, textvariable=theme_var, values=[k for k, _ in self.THEMES], state="readonly",
-                     width=16).pack(side="left", padx=10)
+        theme_box = ttk.Combobox(row, textvariable=theme_var, values=[k for k, _ in self.THEMES],
+                                 state="readonly", width=16)
+        theme_box.pack(side="left", padx=10)
+        saved_theme = s.get("theme", "system")
+
+        def preview_theme(_e=None):          # тема меняется сразу, «Отмена» вернёт прежнюю
+            self.apply_theme(dict(self.THEMES)[theme_var.get()])
+        theme_box.bind("<<ComboboxSelected>>", preview_theme)
+
+        def cancel_settings():
+            if dict(self.THEMES)[theme_var.get()] != saved_theme:
+                self.apply_theme(saved_theme)
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", cancel_settings)
 
         # 2. Звук
         p = page("Звук")
@@ -1193,7 +1205,7 @@ class MainWindow:
 
         bar = ttk.Frame(win, padding=14)
         bar.pack(fill="x")
-        ttk.Button(bar, text="Отмена", command=win.destroy).pack(side="right")
+        ttk.Button(bar, text="Отмена", command=cancel_settings).pack(side="right")
         ttk.Button(bar, text="Сохранить", style="Accent.TButton", command=save).pack(side="right", padx=(0, 8))
 
     def apply_theme(self, mode):
@@ -1202,10 +1214,11 @@ class MainWindow:
         for text in (self.sum_text, self.tr_text):
             theme.text_style(text, self.pal)
             text.configure(state="disabled")
-        self.status.pal = self.work.pal = self.pal
+        self.status.restyle(self.pal)
+        self.work.restyle(self.pal)
         self.records_tree.set_pal(self.pal)
         self.action_bar.configure(bg=self.pal["select"])
-        self.action_text.configure(bg=self.pal["select"], fg=self.pal["text"])
+        self.action_text.configure(bg=self.pal["select"], fg=self.pal["select_fg"], font=(theme.FONT, 10))
         if getattr(self, "_placeholder", False):
             self._entry_style("Placeholder.TEntry")
         self.refresh_records()
