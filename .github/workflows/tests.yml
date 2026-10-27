@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: python -m pip install numpy python-docx
       - name: Syntax
-        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py audio_check.py support.py transcriber.py analyzer.py report.py daily.py tray.py theme.py ui_main.py widgets.py player.py updater.py importer.py salute.py
+        run: python -m py_compile app.py meeting_detector.py win_signals.py training_store.py recorder.py audio_check.py support.py transcriber.py analyzer.py report.py daily.py tray.py theme.py ui_main.py widgets.py player.py updater.py importer.py salute.py voices.py ui_voices.py
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
@@ -56,6 +56,39 @@ jobs:
           }
       - name: Windows API and UI smoke test
         run: python tests/smoke_windows.py
+      - name: Voices on the real model (two synthesized voices)
+        if: matrix.python == '3.12'
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          try { gh api repos/k2-fsa/sherpa-onnx/releases/tags/speaker-recongition-models --jq '[.assets[].name]|join(" ")' | ForEach-Object { Write-Output "::notice title=speaker models::$_" } } catch { Write-Output "assets list unavailable" }
+          Add-Type -AssemblyName System.Speech
+          $dir = Join-Path $env:RUNNER_TEMP "voices"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $installed = $s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo }
+          Write-Output "::notice title=tts voices::$(($installed | ForEach-Object { $_.Name + '/' + $_.Gender }) -join ', ')"
+          $male = $installed | Where-Object { $_.Gender -eq "Male" } | Select-Object -First 1
+          $female = $installed | Where-Object { $_.Gender -eq "Female" } | Select-Object -First 1
+          if (-not $male -or -not $female) { throw "need a male and a female voice" }
+          $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
+          $text = @(
+            "Good morning everyone. Today we will review the project plan and the schedule for the next quarter. Please share your updates one by one.",
+            "Thank you. From my side the design work is almost finished and we are waiting for the final feedback from the customer before the release.",
+            "I have two questions about the budget and the deadlines. We need to decide who will prepare the documents and who will send them to the partners."
+          )
+          foreach ($pair in @(@("v1", $male), @("v2", $female))) {
+            for ($i = 1; $i -le 3; $i++) {
+              $s.SelectVoice($pair[1].Name)
+              $s.SetOutputToWaveFile((Join-Path $dir "$($pair[0])_$i.wav"), $fmt)
+              $s.Speak($text[$i - 1])
+              $s.SetOutputToNull()
+            }
+          }
+          $s.Dispose()
+          python tests/voices_real.py $dir
 
   audio:
     name: real audio device (Python ${{ matrix.python }})

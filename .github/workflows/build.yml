@@ -34,7 +34,7 @@ jobs:
           pyinstaller --noconfirm --clean --windowed --name MeetingHub
           --hidden-import audio_check --hidden-import support --hidden-import pyaudiowpatch
           --collect-data soundcard
-          --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime
+          --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all sherpa_onnx
           --hidden-import transcriber --hidden-import pystray._win32 --collect-data sv_ttk --collect-data docx
           app.py
 

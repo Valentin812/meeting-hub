@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.5.1"
+APP_VERSION = "7.6.0"
 
 import support
 from support import app_dir, data_dir
@@ -610,10 +610,16 @@ class App(MainWindow):
         if st["state"] == "done":
             self._journal_note("Расшифровка готова", name, "auto", file=name)
             self.last_event_text = ""
-            if self.auto_summary.get():
-                self.request_summary(key, automatic=True)
+
+            def after():
+                if self.auto_summary.get():
+                    self.request_summary(key, automatic=True)
+                else:
+                    self.make_protocol(key, notify="Расшифровка встречи готова")
+            if self.voices_wanted():
+                self.run_voices(key, then=after)       # сначала голоса: имена попадут в итоги и протокол
             else:
-                self.make_protocol(key, notify="Расшифровка встречи готова")
+                after()
         elif st["state"] == "error":
             self._journal_note("Ошибка расшифровки", f"{name}: {st['error']}", "auto", file=name)
             self.last_event_text = f"Расшифровка не удалась: {st['error'][:150]}"
