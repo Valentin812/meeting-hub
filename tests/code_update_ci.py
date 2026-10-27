@@ -13,6 +13,12 @@ import tempfile
 import time
 from pathlib import Path
 
+for _s in (sys.stdout, sys.stderr):                  # консоль Windows в CI не UTF-8: кириллица в print падала
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 exe = sys.argv[1]
 data = Path(tempfile.mkdtemp(prefix="mh_code_"))
