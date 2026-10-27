@@ -23,6 +23,7 @@ import transcriber as tr_mod
 import widgets
 from ui_voices import VoicesUI
 from ui_chat import ChatUI
+from ui_ai import AiSetupUI
 import player as player_mod
 from meeting_detector import ASKING, COUNTDOWN, ENDING, IN_MEETING
 
@@ -86,7 +87,7 @@ def read_json(path):
         return None
 
 
-class MainWindow(VoicesUI, ChatUI):
+class MainWindow(VoicesUI, ChatUI, AiSetupUI):
     """Примесь к App: главное окно, карточка встречи и настройки."""
 
     # ------------------------------------------------------------------
@@ -1109,6 +1110,8 @@ class MainWindow(VoicesUI, ChatUI):
         ttk.Entry(grid, textvariable=llm, width=18).grid(row=3, column=1, sticky="w", padx=10, pady=(12, 4))
         ttk.Button(grid, text="Проверить", command=lambda: self.check_ollama(llm.get())).grid(
             row=3, column=2, sticky="w", pady=(12, 4))
+        ttk.Button(grid, text="Установить ИИ…", command=self.open_ai_setup).grid(
+            row=3, column=3, sticky="w", padx=(8, 0), pady=(12, 4))
         voices_on = tk.BooleanVar(value=self.voices_wanted())
         vrow = ttk.Frame(p); vrow.pack(anchor="w", pady=(14, 0))
         ttk.Checkbutton(vrow, text="Определять, кто говорит (по голосу)", variable=voices_on).pack(side="left")
@@ -1119,7 +1122,7 @@ class MainWindow(VoicesUI, ChatUI):
                                                                                               pady=(16, 0))
         hint(p, "Расшифровка и итоги ждут конца встречи, чтобы звонок не тормозил.")
         ttk.Label(p, style="Small.TLabel", wraplength=560, justify="left", text=(
-            "Итоги готовит локальная модель Ollama — один раз запустите setup_ollama.bat из папки программы. "
+            "Итоги и чат готовит локальная модель Ollama — нажмите «Установить ИИ…», программа всё сделает сама. "
             "Без неё в протоколе будет только расшифровка.")).pack(anchor="w")
 
         ttk.Separator(p).pack(fill="x", pady=(14, 8))

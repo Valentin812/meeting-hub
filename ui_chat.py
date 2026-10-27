@@ -149,8 +149,8 @@ class ChatUI:
         self.chat_btn.config(state="normal")
         hist = self.chat_histories.setdefault(key, [])
         if error:
-            hint = ("Не удалось связаться с локальной моделью. Проверьте, что Ollama запущена и модель "
-                    f"установлена (Настройки → «Расшифровка и итоги»). Подробности: {error[:150]}")
+            hint = ("Не удалось связаться с локальной моделью. Откройте ⚙ → «Расшифровка и итоги» → "
+                    f"«Установить ИИ…». Подробности: {error[:150]}")
             if key == self._chat_key():
                 self._chat_write(hint + "\n\n", "hint")
             if hist and hist[-1]["role"] == "user":
