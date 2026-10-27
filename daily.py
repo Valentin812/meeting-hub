@@ -147,7 +147,10 @@ def check_update(current, timeout=8, fetch=None):
     best = newest_release(fetch())
     if best and parse_version(best["tag_name"]) > parse_version(current):
         import updater
-        return best["tag_name"].lstrip("v"), updater.installer_asset(best), best.get("html_url")
+        asset, code = updater.installer_asset(best), updater.code_asset(best)
+        if code:
+            asset = dict(asset or {}, code=code)          # обновить можно и только кодом, без установщика
+        return best["tag_name"].lstrip("v"), asset, best.get("html_url")
     return None
 
 
