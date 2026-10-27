@@ -38,6 +38,7 @@ import recorder as rec_mod
 import transcriber as tr_mod
 import report as report_mod
 import daily
+import ai_setup
 import updater
 import tray as tray_mod
 import theme
@@ -47,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.9.0"
+APP_VERSION = "7.10.0"
 
 import support
 from support import app_dir, data_dir
@@ -1442,18 +1443,19 @@ class App(MainWindow):
         model = (model or self.settings.get("ollama_model") or DEFAULT_MODEL).strip()
 
         def worker():
-            try:
-                models = list_models()
-                ok = any(m == model or m.split(":")[0] == model for m in models)
-                msg = (f"Ollama работает, модель «{model}» установлена." if ok else
-                       f"Ollama работает, но модели «{model}» нет. Запустите setup_ollama.bat "
-                       f"или выполните: ollama pull {model}")
-                self._ui_calls.put((lambda: messagebox.showinfo("Ollama", msg), ()))
-            except Exception as e:
-                err = str(e)
-                self._ui_calls.put((lambda: messagebox.showerror(
-                    "Ollama", "Ollama не отвечает. Один раз запустите setup_ollama.bat из папки программы.\n\n"
-                    "Подробности: " + err), ()))
+            st = ai_setup.status(model)
+            if st == "ok":
+                self._ui_calls.put((lambda: messagebox.showinfo(
+                    "Ollama", f"Ollama работает, модель «{model}» установлена."), ()))
+                return
+            why = {"no_model": f"Ollama работает, но модели «{model}» нет.",
+                   "not_running": "Ollama установлена, но не запущена.",
+                   "not_installed": "Ollama на этом компьютере не установлена."}[st]
+
+            def ask():
+                self._ai_offered = False
+                self.offer_ai_setup(why)
+            self._ui_calls.put((ask, ()))
         threading.Thread(target=worker, daemon=True).start()
 
     def start_analysis(self, transcript, model, automatic=False):
@@ -1487,7 +1489,9 @@ class App(MainWindow):
     def analysis_failed(self, err, automatic):
         src, self.analysis_source = self.analysis_source, None
         if "Connection refused" in err or "urlopen error" in err or "10061" in err:
-            err = "Ollama не запущена. Один раз запустите setup_ollama.bat из папки программы."
+            err = ("ИИ для итогов не установлен или не запущен. Откройте ⚙ → «Расшифровка и итоги» → "
+                   "«Установить ИИ…» — программа всё сделает сама.")
+            self.root.after(500, lambda: self.offer_ai_setup("Итоги не подготовлены."))
         self.last_event_text = "Итоги не получены: " + err[:200]
         self._journal_note("Ошибка итогов", err[:300], "auto")
         if src is not None:
