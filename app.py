@@ -47,7 +47,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.9.0"
+APP_VERSION = "7.9.1"
 
 import support
 from support import app_dir, data_dir
@@ -374,7 +374,7 @@ class App(MainWindow):
         import shutil
         shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
-        self.root.after(20 * 1000, lambda: self.check_updates(manual=False))
+        self.root.after(20 * 1000, self._update_timer)
         self._tick_job = self.root.after(800, self.tick)
         threading.Thread(target=self._recover_recordings, daemon=True).start()
 
@@ -655,9 +655,18 @@ class App(MainWindow):
                            f"срок хранения {days} дн., тексты и протоколы сохранены", "auto")
         self.refresh_records()
 
+    def _update_timer(self):
+        """Проверка раз в час (запрос к GitHub лёгкий); без сети — повтор через 10 минут."""
+        self.check_updates(manual=False)
+        try:
+            self.root.after(3600 * 1000, self._update_timer)
+        except tk.TclError:
+            pass
+
     def check_updates(self, manual=False):
         if not manual and not self.settings.get("check_updates", True):
             return
+        self._last_update_check = time.time()
 
         def work():
             try:
@@ -666,17 +675,14 @@ class App(MainWindow):
                 found, error = None, str(e)
             self._ui_calls.put((self._update_checked, (found, error, manual)))
         threading.Thread(target=work, name="update-check", daemon=True).start()
-        if not manual:
-            try:
-                self.root.after(4 * 3600 * 1000, lambda: self.check_updates(manual=False))
-            except tk.TclError:
-                pass
 
     def _update_checked(self, found, error, manual):
         if found is None:
             if manual:
                 messagebox.showinfo("Обновления", f"Не удалось проверить: {error}" if error else
                                     f"Установлена последняя версия ({APP_VERSION}).")
+            if error and not manual:
+                self.root.after(10 * 60 * 1000, lambda: self.check_updates(manual=False))
             return
         version, asset, page = found
         if self.settings.get("skip_version") == version and not manual:
@@ -687,7 +693,9 @@ class App(MainWindow):
         self.refresh_status()
         if manual:
             self.show_window()
-            self.install_found_update()
+            self._offered_version = None
+            if getattr(self, "_update_toast", None) is None:
+                self.update_toast(found)
             return
         self._offer_update()
 
@@ -1332,6 +1340,8 @@ class App(MainWindow):
         self.quit_app()
 
     def show_window(self):
+        if time.time() - getattr(self, "_last_update_check", 0) > 20 * 60:      # открыли окно — свежая проверка
+            self.check_updates(manual=False)
         try:
             self.root.deiconify()
             self.root.state("normal")
