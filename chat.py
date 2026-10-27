@@ -13,7 +13,8 @@ SYSTEM = ("Ты помощник по записи рабочей встречи
 
 
 def _words(text):
-    return {w for w in re.findall(r"\w{4,}", (text or "").lower())}
+    """Слова-основы (первые 5 букв): «логотипом» и «логотипа» совпадут — для русского этого хватает."""
+    return {w[:5] for w in re.findall(r"\w{4,}", (text or "").lower())}
 
 
 def build_context(title, description, summary, transcript, question, limit=MAX_CONTEXT_CHARS):
@@ -82,3 +83,59 @@ def stream_answer(model, messages, on_text, cancel_event=None, url=OLLAMA_URL, n
     finally:
         response.close()
     return "".join(out)
+
+
+LIST_TITLES = (("decisions", "Решения", "text"), ("tasks", "Задачи", "task"),
+               ("open_questions", "Открытые вопросы", "question"))
+
+
+def _item_text(item, key):
+    if isinstance(item, dict):
+        text = str(item.get(key) or item.get("text") or "")
+        extra = ", ".join(str(item[k]) for k in ("owner", "deadline") if item.get(k))
+        return f"{text} ({extra})" if extra else text
+    return str(item)
+
+
+def summary_text(result):
+    """Итоги встречи (summary.json) одним текстом для ИИ."""
+    result = result or {}
+    parts = []
+    if result.get("summary"):
+        parts.append("Резюме: " + " ".join(str(x) for x in result["summary"]))
+    for key, label, field in LIST_TITLES:
+        rows = [_item_text(x, field) for x in result.get(key) or []]
+        rows = [r for r in rows if r.strip()]
+        if rows:
+            parts.append(label + ":\n" + "\n".join("- " + r for r in rows))
+    return "\n".join(parts)
+
+
+def all_meetings_context(folder, question, limit=MAX_CONTEXT_CHARS):
+    """Итоги всех встреч из папки; самые подходящие вопросу — первыми, пока хватает места."""
+    from pathlib import Path
+    blocks = []
+    for p in sorted(Path(folder).glob("*.summary.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        body = summary_text(data)
+        if not body:
+            continue
+        meta = {}
+        try:
+            meta = json.loads(p.with_name(p.name[:-len(".summary.json")] + ".json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        title = meta.get("title") or data.get("title") or p.name[:-len(".summary.json")]
+        blocks.append((f"=== Встреча «{title}» ({p.name[:10]}) ===\n{body}", _words(title + " " + body)))
+    q = _words(question)
+    blocks.sort(key=lambda b: -len(q & b[1]))
+    out, used = [], 0
+    for text, _w in blocks:
+        if used + len(text) + 2 > limit:
+            continue
+        out.append(text)
+        used += len(text) + 2
+    return "\n\n".join(out)
