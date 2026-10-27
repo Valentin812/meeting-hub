@@ -47,9 +47,12 @@ def ram_gb():
     return None
 
 
-def recommend(ram=None):
+_AUTO = object()
+
+
+def recommend(ram=_AUTO):
     """(модель, размер загрузки ГБ) для этого компьютера. ram — для проверки; по умолчанию определяется сама."""
-    ram = ram_gb() if ram is None else ram
+    ram = ram_gb() if ram is _AUTO else ram
     best = LADDER[0]
     for row in LADDER:
         if ram is not None and ram >= row[0]:
@@ -65,7 +68,7 @@ def rank(model):
     return -1
 
 
-def upgrade_for(current, ram=None):
+def upgrade_for(current, ram=_AUTO):
     """Лучшая модель для компьютера, если она сильнее текущей из лесенки; иначе None."""
     rec, size = recommend(ram)
     if rank(current) >= 0 and rank(rec) > rank(current):
