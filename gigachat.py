@@ -1,38 +1,69 @@
 # -*- coding: utf-8 -*-
 """Итоги и чат через GigaChat (Сбер) с автоматическим переходом на локальную модель (Ollama).
 
+Программа не хранит ключ Сбера: она ходит на сервер-посредник (server/giga-proxy) со своим кодом доступа.
+
 Текст встречи уходит в облако Сбера только если пользователь сам включил это в настройках.
 Любая ошибка облака (нет сети, ключ не принят, лимит токенов) — работа продолжается локальной моделью.
 """
 import json
 import threading
 import time
+import urllib.error
+import urllib.request
 
 import analyzer
 import chat
-from salute import SaluteClient, SaluteError
 
-API_URL = "https://gigachat.devices.sberbank.ru/api/v1"
-SCOPES = ("GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP")
+PROXY_URL = "https://swprtuowqpuwgthigweq.supabase.co/functions/v1/giga-proxy"
 MODELS = ("GigaChat-2-Pro", "GigaChat-2", "GigaChat-2-Max")
 DEFAULT_MODEL = MODELS[0]
 COOLDOWN_SEC = 600
-
-
 RETRY_DELAYS = (3, 8, 20)           # секунды: при «слишком много запросов» ждём и повторяем, а не сдаёмся
 _QUEUE = threading.Lock()           # одна генерация за раз: у бесплатного тарифа один поток
 
 
+class GigaError(Exception):
+    pass
+
+
 def _busy(error):
     text = str(error).lower()
-    return "429" in text or "too many" in text or "503" in text
+    return "429" in text or "too many" in text or "503" in text or "слишком много" in text
 
 
-class GigaClient(SaluteClient):
-    def __init__(self, auth_key, scope="GIGACHAT_API_PERS", verify_tls=True, timeout=120, retry_delays=None, **kw):
-        kw.setdefault("api_url", API_URL)
-        super().__init__(auth_key, scope or SCOPES[0], verify_tls, timeout=timeout, **kw)
+class ProxyClient:
+    """GigaChat через сервер-посредник: ключ Сбера хранится на сервере, в программе только код доступа."""
+
+    def __init__(self, code, url=PROXY_URL, timeout=180, retry_delays=None):
+        self.code = (code or "").strip()
+        self.url = (url or PROXY_URL).rstrip("/")
+        self.timeout = timeout
         self.retry_delays = RETRY_DELAYS if retry_delays is None else retry_delays
+
+    def _request(self, data=None):
+        if not self.code:
+            raise GigaError("не указан код доступа")
+        req = urllib.request.Request(self.url, data=data, method="POST" if data is not None else "GET", headers={
+            "x-hub-token": self.code, "Content-Type": "application/json", "User-Agent": "MeetingHub"})
+        try:
+            return urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:300]
+            try:
+                body = json.loads(body).get("error") or body
+            except (ValueError, AttributeError):
+                pass
+            raise GigaError(f"сервис ответил {e.code}: {body}")
+        except OSError as e:
+            raise GigaError(f"нет связи с сервисом: {getattr(e, 'reason', e)}")
+
+    def check(self):
+        with self._request() as r:
+            data = json.loads(r.read().decode("utf-8"))
+        if not data.get("ok"):
+            raise GigaError(data.get("error") or "сервис не готов")
+        return f"Подключение работает: код принят ({data.get('user', '')})."
 
     def _queued(self, call, cancel_event=None):
         """Запросы идут по очереди; если сервис занят — ждём и повторяем несколько раз."""
@@ -40,7 +71,7 @@ class GigaClient(SaluteClient):
             for delay in (*self.retry_delays, None):
                 try:
                     return call()
-                except SaluteError as e:
+                except GigaError as e:
                     if delay is None or not _busy(e):
                         raise
                     end = time.time() + delay
@@ -49,12 +80,8 @@ class GigaClient(SaluteClient):
                             raise
                         time.sleep(0.2)
 
-    def check(self):
-        self._token = ""
-        self.token()
-        return "Подключение работает: ключ принят."
-
-    def _payload(self, messages, model, stream, temperature):
+    @staticmethod
+    def _payload(messages, model, stream, temperature):
         return json.dumps({"model": model or DEFAULT_MODEL, "messages": messages, "stream": stream,
                            "temperature": temperature}, ensure_ascii=False).encode("utf-8")
 
@@ -62,31 +89,20 @@ class GigaClient(SaluteClient):
         return self._queued(lambda: self._complete(messages, model, temperature), cancel_event)
 
     def _complete(self, messages, model, temperature):
-        raw = self._request(self.api_url + "/chat/completions", self._payload(messages, model, False, temperature),
-                            self._auth({"Content-Type": "application/json", "Accept": "application/json"}), "POST")
-        data = self._json(raw, "ответ GigaChat")
+        with self._request(self._payload(messages, model, False, temperature)) as r:
+            raw = r.read().decode("utf-8")
         try:
-            return data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            raise SaluteError("GigaChat: неожиданный ответ сервиса")
+            return json.loads(raw)["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise GigaError("GigaChat: неожиданный ответ сервиса")
 
     def stream(self, messages, model, on_text, cancel_event=None, temperature=0.3):
         return self._queued(lambda: self._stream(messages, model, on_text, cancel_event, temperature), cancel_event)
 
     def _stream(self, messages, model, on_text, cancel_event, temperature):
         """Ответ по кусочкам (SSE). Возвращает полный текст."""
-        import urllib.error
-        import urllib.request
-        req = urllib.request.Request(
-            self.api_url + "/chat/completions", data=self._payload(messages, model, True, temperature),
-            headers=self._auth({"Content-Type": "application/json", "Accept": "text/event-stream"}), method="POST")
         out = []
-        try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout, context=self.ctx)
-        except urllib.error.HTTPError as e:
-            raise SaluteError(f"сервис ответил {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
-        except OSError as e:
-            raise SaluteError(f"нет связи с сервисом: {e}")
+        resp = self._request(self._payload(messages, model, True, temperature))
         try:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
@@ -142,7 +158,7 @@ class LlmRouter:
                 return analyzer.parse_json(text)
             except analyzer.Cancelled:
                 raise
-            except (SaluteError, ValueError, OSError, KeyError, TypeError) as e:
+            except (GigaError, ValueError, OSError, KeyError, TypeError) as e:
                 self._failed(str(e))
         self.name = "ollama (запасной)" if self.client is not None else "ollama"
         return analyzer.ollama_chat(self.local_model, system, user, cancel_event)
@@ -156,7 +172,7 @@ class LlmRouter:
                                           cancel_event)
                 self.name = "gigachat"
                 return text
-            except (SaluteError, OSError) as e:
+            except (GigaError, OSError) as e:
                 self._failed(str(e))
                 if got:                                   # часть ответа уже показана — не дублируем
                     return "".join(got)

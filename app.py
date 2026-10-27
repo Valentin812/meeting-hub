@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.12.1"
+APP_VERSION = "7.13.0"
 
 import support
 from support import app_dir, data_dir
@@ -515,17 +515,15 @@ class App(MainWindow):
         return self.tq
 
     def llm_router(self, model=None):
-        """Куда идут итоги и чат: GigaChat, если включён и есть ключ, иначе только локальная Ollama."""
+        """Куда идут итоги и чат: GigaChat через посредника, если включён и есть код доступа, иначе Ollama."""
         import gigachat
         s = self.settings
         local = (model or s.get("ollama_model") or DEFAULT_MODEL).strip()
-        key = (s.get("giga_key") or s.get("salute_key") or "").strip()
-        sig = (key, s.get("giga_scope"), bool(s.get("salute_insecure")), s.get("giga_model"), local)
+        code = (s.get("giga_code") or "").strip()
+        sig = (code, s.get("giga_proxy_url"), s.get("giga_model"), local, bool(s.get("giga_enabled")))
         if getattr(self, "_router_sig", None) != sig or getattr(self, "_router", None) is None:
-            client = None
-            if s.get("giga_enabled") and key:
-                client = gigachat.GigaClient(key, s.get("giga_scope") or gigachat.SCOPES[0],
-                                             verify_tls=not s.get("salute_insecure", False))
+            client = gigachat.ProxyClient(code, s.get("giga_proxy_url") or gigachat.PROXY_URL) \
+                if s.get("giga_enabled") and code else None
             self._router = gigachat.LlmRouter(local, client, s.get("giga_model") or gigachat.DEFAULT_MODEL,
                                               notify=self._giga_fallback)
             self._router_sig = sig
@@ -535,12 +533,13 @@ class App(MainWindow):
         self._ui_calls.put((lambda: self._journal_note(
             "GigaChat недоступен", f"{reason}. Использую локальную модель.", "auto"), ()))
 
-    def check_giga(self, key, scope, insecure, parent=None):
+    def check_giga(self, code, parent=None):
         import gigachat
 
         def worker():
             try:
-                msg = gigachat.GigaClient(key, scope, verify_tls=not insecure, timeout=20).check()
+                msg = gigachat.ProxyClient(code, self.settings.get("giga_proxy_url") or gigachat.PROXY_URL,
+                                           timeout=30).check()
                 show = messagebox.showinfo
             except Exception as e:
                 msg, show = f"Не получилось: {e}", messagebox.showwarning

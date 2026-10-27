@@ -1143,24 +1143,17 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
 
         ttk.Separator(p).pack(fill="x", pady=(14, 8))
         g_on = tk.BooleanVar(value=bool(s.get("giga_enabled")))
-        g_key = tk.StringVar(value=s.get("giga_key", ""))
-        g_model = tk.StringVar(value=s.get("giga_model", gigachat.DEFAULT_MODEL))
-        g_scope = tk.StringVar(value=s.get("giga_scope", gigachat.SCOPES[0]))
+        g_code = tk.StringVar(value=s.get("giga_code", ""))
         ttk.Checkbutton(p, text="Итоги, задачи и чат через GigaChat (Сбер)", variable=g_on).pack(anchor="w")
-        hint(p, "Если облако не отвечает или токены кончились, программа сама использует локальную модель. "
-                "Текст встреч уходит на серверы Сбера — включайте, только если это допустимо для ваших встреч.")
+        hint(p, "Если облако не отвечает или лимит кончился, программа сама использует локальную модель. "
+                "Текст встреч уходит на серверы (через сервер команды — к Сберу): включайте, только если это "
+                "допустимо для ваших встреч.")
         grow = ttk.Frame(p); grow.pack(fill="x", padx=(28, 0))
-        ttk.Label(grow, text="Ключ GigaChat").pack(side="left")
-        ttk.Entry(grow, textvariable=g_key, show="•", width=30).pack(side="left", padx=8)
-        ttk.Button(grow, text="Проверить", command=lambda: self.check_giga(
-            (g_key.get() or s_key.get()).strip(), g_scope.get(), s_insecure.get(), win)).pack(side="left")
-        hint(p, "Пусто — используется ключ SaluteSpeech (подойдёт, если у проекта включены оба сервиса).")
-        mrow = ttk.Frame(p); mrow.pack(fill="x", padx=(28, 0), pady=(4, 0))
-        ttk.Label(mrow, text="Модель").pack(side="left")
-        ttk.Combobox(mrow, textvariable=g_model, values=list(gigachat.MODELS), width=16).pack(side="left", padx=8)
-        ttk.Label(mrow, text="Доступ").pack(side="left", padx=(12, 0))
-        ttk.Combobox(mrow, textvariable=g_scope, values=list(gigachat.SCOPES), state="readonly",
-                     width=18).pack(side="left", padx=8)
+        ttk.Label(grow, text="Код доступа").pack(side="left")
+        ttk.Entry(grow, textvariable=g_code, show="•", width=30).pack(side="left", padx=8)
+        ttk.Button(grow, text="Проверить", command=lambda: self.check_giga(g_code.get().strip(), win)).pack(
+            side="left")
+        hint(p, "Код выдаёт администратор. Ключ Сбера в программе не нужен и нигде не хранится.")
 
         # 4. Хранение
         p = page("Хранение")
@@ -1225,7 +1218,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                     "Включить?", icon="warning", parent=win):
                 s_on.set(False)
             if g_on.get() and not s.get("giga_enabled") and not messagebox.askokcancel(
-                    "GigaChat", "Тексты встреч (расшифровка и вопросы в чате) будут отправляться в облако Сбера.\n\n"
+                    "GigaChat", "Тексты встреч (расшифровка и вопросы в чате) будут отправляться на сервер команды и дальше в облако Сбера.\n\n"
                     "Включить?", icon="warning", parent=win):
                 g_on.set(False)
             new_theme = dict(self.THEMES)[theme_var.get()]
@@ -1236,8 +1229,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()), salute_enabled=bool(s_on.get()),
                      salute_key=s_key.get().strip(), salute_insecure=bool(s_insecure.get()),
-                     giga_enabled=bool(g_on.get()), giga_key=g_key.get().strip(),
-                     giga_model=g_model.get().strip() or gigachat.DEFAULT_MODEL, giga_scope=g_scope.get())
+                     giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip())
             theme_changed = new_theme != s.get("theme", "system")
             s["theme"] = new_theme
             if theme_changed:

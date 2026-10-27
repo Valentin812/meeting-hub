@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gigachat  # noqa: E402
-from salute import SaluteError  # noqa: E402
+SaluteError = gigachat.GigaError
 
 
 class Giga(BaseHTTPRequestHandler):
@@ -23,10 +23,10 @@ class Giga(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        if self.path.endswith("/oauth"):
-            return self._json(200, {"access_token": "T", "expires_at": 9999999999999})
         req = json.loads(body)
-        Giga.seen.append((self.headers.get("Authorization"), req))
+        Giga.seen.append((self.headers.get("x-hub-token"), req))
+        if self.headers.get("x-hub-token") != "CODE":
+            return self._json(401, {"error": "неверный код доступа"})
         if Giga.mode.startswith("busy"):                      # busy2: два отказа 429, потом успех
             left = int(Giga.mode[4:] or 99)
             if left > 0:
@@ -46,6 +46,11 @@ class Giga(BaseHTTPRequestHandler):
         answer = json.dumps({"summary": ["Итог"], "decisions": [], "tasks": []}, ensure_ascii=False)
         self._json(200, {"choices": [{"message": {"content": "Вот JSON:\n" + answer}}]})
 
+    def do_GET(self):
+        if self.headers.get("x-hub-token") != "CODE":
+            return self._json(401, {"error": "неверный код доступа"})
+        self._json(200, {"ok": True, "user": "Тест"})
+
     def log_message(self, *a):
         pass
 
@@ -54,7 +59,7 @@ def start():
     srv = HTTPServer(("127.0.0.1", 0), Giga)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
-    return srv, gigachat.GigaClient("KEY", oauth_url=base + "/oauth", api_url=base + "/api/v1", timeout=10)
+    return srv, gigachat.ProxyClient("CODE", url=base + "/giga-proxy", timeout=10)
 
 
 class ClientTests(unittest.TestCase):
@@ -68,12 +73,21 @@ class ClientTests(unittest.TestCase):
     def test_complete_and_stream(self):
         text = self.client.complete([{"role": "user", "content": "hi"}], "GigaChat-2-Pro")
         self.assertIn("summary", text)
-        self.assertEqual(Giga.seen[0][0], "Bearer T")
+        self.assertEqual(Giga.seen[0][0], "CODE")
         self.assertEqual(Giga.seen[0][1]["model"], "GigaChat-2-Pro")
         got = []
         full = self.client.stream([{"role": "user", "content": "q"}], "GigaChat-2", got.append)
         self.assertEqual(full, "Договорились на пятницу.")
         self.assertEqual(got, ["Договорились ", "на пятницу."])
+
+    def test_check_and_wrong_code(self):
+        self.assertIn("код принят", self.client.check())
+        bad = gigachat.ProxyClient("WRONG", url=self.client.url)
+        with self.assertRaises(SaluteError) as cm:
+            bad.check()
+        self.assertIn("401", str(cm.exception))
+        with self.assertRaises(SaluteError):
+            gigachat.ProxyClient("").check()
 
     def test_http_error(self):
         Giga.mode = "fail"
