@@ -5,6 +5,7 @@
 Любая ошибка облака (нет сети, ключ не принят, лимит токенов) — работа продолжается локальной моделью.
 """
 import json
+import threading
 import time
 
 import analyzer
@@ -18,10 +19,35 @@ DEFAULT_MODEL = MODELS[0]
 COOLDOWN_SEC = 600
 
 
+RETRY_DELAYS = (3, 8, 20)           # секунды: при «слишком много запросов» ждём и повторяем, а не сдаёмся
+_QUEUE = threading.Lock()           # одна генерация за раз: у бесплатного тарифа один поток
+
+
+def _busy(error):
+    text = str(error).lower()
+    return "429" in text or "too many" in text or "503" in text
+
+
 class GigaClient(SaluteClient):
-    def __init__(self, auth_key, scope="GIGACHAT_API_PERS", verify_tls=True, timeout=120, **kw):
+    def __init__(self, auth_key, scope="GIGACHAT_API_PERS", verify_tls=True, timeout=120, retry_delays=None, **kw):
         kw.setdefault("api_url", API_URL)
         super().__init__(auth_key, scope or SCOPES[0], verify_tls, timeout=timeout, **kw)
+        self.retry_delays = RETRY_DELAYS if retry_delays is None else retry_delays
+
+    def _queued(self, call, cancel_event=None):
+        """Запросы идут по очереди; если сервис занят — ждём и повторяем несколько раз."""
+        with _QUEUE:
+            for delay in (*self.retry_delays, None):
+                try:
+                    return call()
+                except SaluteError as e:
+                    if delay is None or not _busy(e):
+                        raise
+                    end = time.time() + delay
+                    while time.time() < end:
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise
+                        time.sleep(0.2)
 
     def check(self):
         self._token = ""
@@ -32,7 +58,10 @@ class GigaClient(SaluteClient):
         return json.dumps({"model": model or DEFAULT_MODEL, "messages": messages, "stream": stream,
                            "temperature": temperature}, ensure_ascii=False).encode("utf-8")
 
-    def complete(self, messages, model=DEFAULT_MODEL, temperature=0.1):
+    def complete(self, messages, model=DEFAULT_MODEL, temperature=0.1, cancel_event=None):
+        return self._queued(lambda: self._complete(messages, model, temperature), cancel_event)
+
+    def _complete(self, messages, model, temperature):
         raw = self._request(self.api_url + "/chat/completions", self._payload(messages, model, False, temperature),
                             self._auth({"Content-Type": "application/json", "Accept": "application/json"}), "POST")
         data = self._json(raw, "ответ GigaChat")
@@ -42,6 +71,9 @@ class GigaClient(SaluteClient):
             raise SaluteError("GigaChat: неожиданный ответ сервиса")
 
     def stream(self, messages, model, on_text, cancel_event=None, temperature=0.3):
+        return self._queued(lambda: self._stream(messages, model, on_text, cancel_event, temperature), cancel_event)
+
+    def _stream(self, messages, model, on_text, cancel_event, temperature):
         """Ответ по кусочкам (SSE). Возвращает полный текст."""
         import urllib.error
         import urllib.request
@@ -104,7 +136,8 @@ class LlmRouter:
         if self._cloud_ready():
             try:
                 text = self.client.complete([{"role": "system", "content": system},
-                                             {"role": "user", "content": user}], self.giga_model)
+                                             {"role": "user", "content": user}], self.giga_model,
+                                            cancel_event=cancel_event)
                 self.name = "gigachat"
                 return analyzer.parse_json(text)
             except analyzer.Cancelled:
