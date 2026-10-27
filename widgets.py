@@ -105,14 +105,14 @@ class MeetingList(ttk.Frame):
             for child in self.inner.winfo_children():
                 child.destroy()
             self.cards, self.order = {}, []
-            self.canvas.configure(bg=self.pal.get("sidebar", self.pal.get("sidebar", pal["bg"])))
-            self.inner.configure(bg=self.pal.get("sidebar", self.pal.get("sidebar", pal["bg"])))
+            self.canvas.configure(bg=self.pal.get("sidebar", self.pal["bg"]))
+            self.inner.configure(bg=self.pal.get("sidebar", self.pal["bg"]))
             day = None
             for r in rows:
                 if r["day"] != day:
                     day = r["day"]
                     tk.Label(self.inner, text=day.upper(), font=self.day_font, fg=self.pal["faint"],
-                             bg=self.pal.get("sidebar", self.pal.get("sidebar", pal["bg"])), anchor="w").pack(fill="x", padx=10, pady=(14 if self.order else 4, 4))
+                             bg=self.pal.get("sidebar", self.pal["bg"]), anchor="w").pack(fill="x", padx=10, pady=(14 if self.order else 4, 4))
                 self._make_card(r)
             self._structure = structure
             if self.selected not in self.cards:
