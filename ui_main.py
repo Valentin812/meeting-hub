@@ -21,6 +21,7 @@ import report as report_mod
 import theme
 import transcriber as tr_mod
 import widgets
+from ui_voices import VoicesUI
 import player as player_mod
 from meeting_detector import ASKING, COUNTDOWN, ENDING, IN_MEETING
 
@@ -84,7 +85,7 @@ def read_json(path):
         return None
 
 
-class MainWindow:
+class MainWindow(VoicesUI):
     """Примесь к App: главное окно, карточка встречи и настройки."""
 
     # ------------------------------------------------------------------
@@ -212,6 +213,7 @@ class MainWindow:
         self.task_tree.pack(fill="both", expand=True)
         self.tasks_tab = tasks
         self.tr_text = self._text_tab(self.detail_nb, "Расшифровка")
+        self.build_voices_tab(self.detail_nb)
 
         self.empty = ttk.Frame(right, padding=(10, 60))
         big = widgets.app_icon(72)
@@ -398,6 +400,7 @@ class MainWindow:
         self._render_summary(result, wav, key)
         self._render_tasks(result)
         self._render_transcript(wav)
+        self.render_voices(wav)
 
     @staticmethod
     def _mtime(path):
@@ -911,6 +914,8 @@ class MainWindow:
                 parts.append(text + (f" (ещё {queued})" if queued else ""))
             elif queued:
                 parts.append(f"расшифровка: в очереди {queued}")
+        if self.voice_busy():
+            parts.append("определяю голоса")
         jobs = len(self.summary_jobs)
         if self.analysis_running:
             parts.append("итоги" + (f" (ещё {jobs})" if jobs else ""))
@@ -1088,6 +1093,11 @@ class MainWindow:
         ttk.Entry(grid, textvariable=llm, width=18).grid(row=3, column=1, sticky="w", padx=10, pady=(12, 4))
         ttk.Button(grid, text="Проверить", command=lambda: self.check_ollama(llm.get())).grid(
             row=3, column=2, sticky="w", pady=(12, 4))
+        voices_on = tk.BooleanVar(value=self.voices_wanted())
+        vrow = ttk.Frame(p); vrow.pack(anchor="w", pady=(14, 0))
+        ttk.Checkbutton(vrow, text="Определять, кто говорит (по голосу)", variable=voices_on).pack(side="left")
+        ttk.Button(vrow, text="Известные голоса…", command=lambda: self.open_known_voices(win)).pack(
+            side="left", padx=(12, 0))
         pause = tk.BooleanVar(value=self.auto_pause.get())
         ttk.Checkbutton(p, text="Не нагружать компьютер во время встречи", variable=pause).pack(anchor="w",
                                                                                               pady=(16, 0))
@@ -1179,7 +1189,7 @@ class MainWindow:
                      language=lang.get(), ollama_model=llm.get().strip() or self.default_llm,
                      record_meetings=self.record_meetings.get(), auto_transcribe=self.auto_transcribe.get(),
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
-                     auto_pause=self.auto_pause.get(), salute_enabled=bool(s_on.get()),
+                     auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()), salute_enabled=bool(s_on.get()),
                      salute_key=s_key.get().strip(), salute_insecure=bool(s_insecure.get()))
             theme_changed = new_theme != s.get("theme", "system")
             s["theme"] = new_theme

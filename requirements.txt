@@ -6,3 +6,4 @@ pystray>=0.19.5
 Pillow>=10.4
 sv-ttk>=2.6
 python-docx>=1.1
+sherpa-onnx>=1.10; python_version < "3.14"
