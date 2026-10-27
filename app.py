@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.13.0"
+APP_VERSION = "7.14.0"
 
 import support
 from support import app_dir, data_dir
@@ -376,6 +376,7 @@ class App(MainWindow):
         shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
         self.root.after(20 * 1000, self._update_timer)
+        self.root.after(60 * 1000, lambda: updater.mark_code_good(self.data_dir))   # новый код продержался минуту
         self._tick_job = self.root.after(800, self.tick)
         threading.Thread(target=self._recover_recordings, daemon=True).start()
 
@@ -803,13 +804,16 @@ class App(MainWindow):
         if not found:
             return
         version, asset, page = found
-        if updater.can_self_update() and asset is not None:
+        code = (asset or {}).get("code")
+        if updater.can_update_code(code):
+            self.start_update(code["version"], code, code_only=True)       # только код: exe не меняется
+        elif updater.can_self_update() and asset and asset.get("url"):
             self.start_update(version, asset)
         else:
             import webbrowser
             webbrowser.open((asset or {}).get("url") or page)
 
-    def start_update(self, version, asset):
+    def start_update(self, version, asset, code_only=False):
         if self.recorder is not None or self.detector.in_meeting:
             messagebox.showinfo("Обновление", "Сейчас идёт встреча или запись. Обновите программу после неё: "
                                 "⚙ → «Хранение» → «Проверить сейчас».", parent=self.root)
@@ -858,13 +862,18 @@ class App(MainWindow):
                 if "отменено" not in error:
                     messagebox.showerror("Обновление", error, parent=self.root)
                 return
-            label.config(text="Устанавливаю… Программа закроется и через минуту откроется снова.")
+            label.config(text="Устанавливаю… Программа перезапустится сама.")
             bar["value"] = 100
             btn.state(["disabled"])
-            self._journal_note("Обновление", f"Установка версии {version}", "user")
+            self._journal_note("Обновление", f"Установка версии {version}" + (" (только код)" if code_only else ""),
+                               "user")
             try:
-                updater.launch_installer(path)
-            except OSError as e:
+                if code_only:
+                    updater.install_code(path, self.data_dir, version)
+                    updater.restart_self()
+                else:
+                    updater.launch_installer(path)
+            except (OSError, updater.UpdateError) as e:
                 messagebox.showerror("Обновление", f"Не удалось запустить установку: {e}", parent=self.root)
                 win.destroy()
                 return
@@ -1659,6 +1668,12 @@ def cli_play_test(seconds=1.5):
 
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--code-info"]:                      # для проверки обновления кода на сборке
+        info = {"version": APP_VERSION, "file": os.path.abspath(__file__),
+                "base_runtime": os.environ.get("MEETINGHUB_BASE_RUNTIME", ""),
+                "base_version": os.environ.get("MEETINGHUB_BASE_VERSION", "")}
+        (data_dir() / "code_info.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+        return
     if args[:1] == ["--voices-test"]:
         cli_voices_test()
         return

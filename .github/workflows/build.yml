@@ -28,6 +28,7 @@ jobs:
         run: |
           $v = (Select-String -Path app.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
           "version=$v" >> $env:GITHUB_OUTPUT
+          Set-Content -Path base_version.txt -Value $v -NoNewline -Encoding ascii
 
       - name: Build exe
         run: >
@@ -36,7 +37,19 @@ jobs:
           --collect-data soundcard
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all sherpa_onnx
           --hidden-import transcriber --hidden-import pystray._win32 --collect-data sv_ttk --collect-data docx
-          app.py
+          --hidden-import app --add-data "runtime.json;." --add-data "base_version.txt;."
+          launcher.py
+
+      - name: Runtime contract (exe contains everything the code imports)
+        run: python packaging/runtime_tool.py
+
+      - name: Code update archive
+        shell: pwsh
+        run: |
+          python packaging/make_code_zip.py "${{ steps.ver.outputs.version }}" pkg
+          $zip = (Get-ChildItem pkg\MeetingHubCode-*.zip | Select-Object -First 1).FullName
+          "codezip=$zip" >> $env:GITHUB_ENV
+          Write-Output "::notice title=code update::$zip"
 
       - name: Code signing certificate (optional)
         id: cert
@@ -129,6 +142,10 @@ jobs:
           if ($j.system_peak -lt 1000) { throw "computer sound was not recorded" }
           if ([math]::Abs($j.duration - 4) -gt 0.5) { throw "wrong duration" }
           if (Test-Path "$env:LOCALAPPDATA\Programs\Meeting Hub\recordings") { throw "data written next to the program instead of the user profile" }
+
+      - name: Test - unchanged exe picks up a code update, broken update rolls back
+        timeout-minutes: 5
+        run: python tests\code_update_ci.py "$env:LOCALAPPDATA\Programs\Meeting Hub\MeetingHub.exe"
 
       - name: Test - installed app plays a recording inside the program
         timeout-minutes: 3
@@ -292,5 +309,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --prerelease --target $env:GITHUB_SHA --title "Meeting Hub $tag" --notes "MeetingHubSetup — установщик (рекомендуется). portable.zip — версия без установки. Подпись: $signed. Сборка из коммита $env:GITHUB_SHA."
           }
-          gh release upload $tag $env:setup $env:portable --clobber
+          gh release upload $tag $env:setup $env:portable $env:codezip --clobber
           if (Test-Path shots) { gh release upload $tag (Get-ChildItem shots\*.png).FullName --clobber }
