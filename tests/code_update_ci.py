@@ -56,30 +56,42 @@ def install(version, runtime=1, broken=False, pending=False, previous="", attemp
         {"active": version, "previous": previous, "pending": pending, "attempts": attempts}))
 
 
-base = run()
-print("основа:", base)
-if not (base["base_runtime"] and base["base_version"]):
-    fail("launcher не передал сведения об основе", **base)
-if base["version"] != base["base_version"]:
-    fail("без обновления должен работать вшитый код", **base)
-if str(data) in base["file"]:
-    fail("вшитый код загружен из папки данных", **base)
+def main():
+    base = run()
+    print("основа:", base)
+    if not (base["base_runtime"] and base["base_version"]):
+        fail("launcher не передал сведения об основе", **base)
+    if base["version"] != base["base_version"]:
+        fail("без обновления должен работать вшитый код", **base)
+    if str(data) in base["file"]:
+        fail("вшитый код загружен из папки данных", **base)
 
-install("99.0.0")
-now = run()
-print("с обновлением кода:", now)
-if now["version"] != "99.0.0" or str(data / "code" / "99.0.0") not in now["file"]:
-    fail("код из папки обновления не подхватился", **now)
+    install("99.0.0")
+    now = run()
+    print("с обновлением кода:", now)
+    if now["version"] != "99.0.0" or str(data / "code" / "99.0.0") not in now["file"]:
+        fail("код из папки обновления не подхватился", **now)
 
-install("99.0.1", broken=True, pending=True, previous="99.0.0")
-after = run()
-print("после битого обновления:", after)
-if after["version"] != "99.0.0":
-    fail("битое обновление не откатилось на предыдущее", **after)
+    install("99.0.1", broken=True, pending=True, previous="99.0.0")
+    after = run()
+    print("после битого обновления:", after)
+    if after["version"] != "99.0.0":
+        fail("битое обновление не откатилось на предыдущее", **after)
 
-install("99.0.2", runtime=int(base["base_runtime"]) + 5)
-skipped = run()
-print("обновление требует новой основы:", skipped)
-if skipped["version"] != base["base_version"]:
-    fail("обновление с чужим runtime не должно применяться", **skipped)
-print("OK")
+    install("99.0.2", runtime=int(base["base_runtime"]) + 5)
+    skipped = run()
+    print("обновление требует новой основы:", skipped)
+    if skipped["version"] != base["base_version"]:
+        fail("обновление с чужим runtime не должно применяться", **skipped)
+    print("OK")
+
+
+try:
+    main()
+except SystemExit:
+    raise
+except BaseException as e:                          # любой сбой должен быть виден в аннотациях CI
+    import traceback
+    text = traceback.format_exc().replace("\n", " | ")[-900:]
+    print(f"::error title=code update test::{type(e).__name__}: {text}")
+    raise SystemExit(1)
