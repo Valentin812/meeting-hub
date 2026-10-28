@@ -251,4 +251,5 @@ def text_style(widget, pal, size=10):
         widget.tag_configure("chip_" + name, background=bg, foreground=fg, font=(f, size - 1, b))
     widget.tag_configure("chips", spacing1=4, spacing3=6)
     widget.tag_configure("now", background=pal["select"], foreground=pal["select_fg"])
+    widget.tag_configure("found", background="#ffe27a", foreground="#1b1b1b")
     widget.tag_configure("lead", font=(f, size + 1), spacing3=6, lmargin1=8, lmargin2=8)

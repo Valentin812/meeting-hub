@@ -330,7 +330,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             return
         self._search_job = None
         query = self.search_query()
-        hits = daily.search(self.rec_folder, query) if query else None
+        hits = daily.search_hits(self.rec_folder, query) if query else None
         items = [i for i in rec_mod.list_recordings(self.rec_folder)
                  if hits is None or i["path"].stem in hits]
         rows = []
@@ -339,10 +339,14 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             state, key = self.meeting_state(it)
             chip = self.SHORT.get(key) or self.busy_chip(state)
             info = " · ".join(x for x in (clock(stem), dur_text(it.get("duration_sec"))) if x)
+            if hits is not None and hits.get(stem, {}).get("snippet"):
+                info = hits[stem]["snippet"]                 # где именно нашлось
             rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": meeting_title(it),
                          "info": info, "chip": chip, "key": key})
         lst = self.records_tree
         lst.set_rows(rows)
+        if hasattr(self, "tr_text"):
+            self._highlight_search()
         sel = str(self.selected) if self.selected is not None else None
         if sel is None or not lst.exists(sel):
             last = str(self.rec_folder / (str(self.settings.get("last_selected", "")) + ".wav"))
@@ -415,8 +419,35 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self._render_summary(result, wav, key)
         self._render_tasks(result)
         self._render_transcript(wav)
+        self._highlight_search()
         self.render_voices(wav)
         self.render_chat()
+
+    def _highlight_search(self):
+        """Подсветить слова запроса в итогах и расшифровке открытой встречи; расшифровка прокручивается к первому."""
+        query = self.search_query()
+        for text in (self.sum_text, self.tr_text):
+            text.tag_remove("found", "1.0", "end")
+        if not query:
+            return
+        first = None
+        for text in (self.sum_text, self.tr_text):
+            text.configure(state="normal")
+            for pat in daily._patterns(query):
+                idx = "1.0"
+                while True:
+                    idx = text.search(pat, idx, stopindex="end", nocase=True)
+                    if not idx:
+                        break
+                    end = text.index(f"{idx}+{len(pat)}c wordend")
+                    text.tag_add("found", idx, end)
+                    if text is self.tr_text and (first is None or text.compare(idx, "<", first)):
+                        first = idx
+                    idx = end
+            text.tag_raise("found")
+            text.configure(state="disabled")
+        if first:
+            self.tr_text.see(first)
 
     @staticmethod
     def _mtime(path):
