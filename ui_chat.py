@@ -36,8 +36,7 @@ class ChatUI:
         self.chat_btn = ttk.Button(row, text="Спросить", style="Accent.TButton", command=self.chat_send)
         self.chat_btn.pack(side="left", padx=(6, 0))
         self.chat_note = ttk.Label(tab, style="Small.TLabel", wraplength=560, justify="left",
-                                   text="Отвечает локальная модель на этом компьютере, по тексту встречи. "
-                                        "Она может ошибаться — важное проверяйте по расшифровке.")
+                                   text=self.chat_note_text())
         self.chat_note.pack(anchor="w", pady=(4, 0))
         self.render_chat()
 
@@ -70,6 +69,8 @@ class ChatUI:
         if self.chat_busy and getattr(self, "_chat_shown", None) == self._chat_key():
             return                                     # идёт ответ — не стираем его на полуслове
         self._chat_shown = self._chat_key()
+        if hasattr(self, "chat_note"):
+            self.chat_note.config(text=self.chat_note_text())
         self.chat_log.config(state="normal")
         self.chat_log.delete("1.0", "end")
         self.chat_log.config(state="disabled")
@@ -103,8 +104,15 @@ class ChatUI:
             text = tr_mod.output_paths(wav)[0].read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             pass
+        limit = chat.CLOUD_CONTEXT_CHARS if self.cloud_chat_on() and not self.is_confidential(wav) \
+            else chat.MAX_CONTEXT_CHARS
         return chat.build_context(meta.get("title") or result.get("title"), meta.get("description"),
-                                  chat.summary_text(result), text, question)
+                                  chat.summary_text(result), text, question, limit=limit)
+
+    def chat_note_text(self):
+        who = ("Отвечает GigaChat (текст проходит маскирование личных данных); конфиденциальные встречи — "
+               "только локальная модель." if self.cloud_chat_on() else "Отвечает локальная модель на этом компьютере.")
+        return who + " Модель может ошибаться — важное проверяйте по расшифровке."
 
     def cloud_chat_on(self):
         return bool(self.settings.get("giga_enabled") and (self.settings.get("giga_code") or "").strip())
@@ -135,10 +143,13 @@ class ChatUI:
         def work():
             answer, error = "", ""
             try:
-                answer = self.llm_router(model).stream(
+                router = self.llm_router(model)
+                answer = router.stream(
                     messages, lambda t: put((self._chat_piece, (key, t))), self.chat_cancel,
                     meeting=Path(wav).stem if wav else None,
                     local_only=bool(wav) and self.is_confidential(wav))
+                if "запасной" in router.name:
+                    put((self._chat_piece, (key, "\n(GigaChat недоступен — ответила локальная модель)")))
             except Exception as e:
                 error = str(e)
             put((self._chat_done, (key, answer, error)))
@@ -225,7 +236,8 @@ class ChatUI:
             if not question or state["busy"]:
                 return
             skip = privacy.confidential_stems(self.rec_folder, self.privacy_words()) if self.cloud_chat_on() else ()
-            context = chat.all_meetings_context(self.rec_folder, question, skip=skip)
+            limit = chat.CLOUD_CONTEXT_CHARS if self.cloud_chat_on() else chat.MAX_CONTEXT_CHARS
+            context = chat.all_meetings_context(self.rec_folder, question, limit=limit, skip=skip)
             if not context.strip():
                 write("Подходящих итогов встреч не нашлось.\n", "hint")
                 return
@@ -243,8 +255,11 @@ class ChatUI:
             def work():
                 answer, error = "", ""
                 try:
-                    answer = self.llm_router(model).stream(
+                    router = self.llm_router(model)
+                    answer = router.stream(
                         messages, lambda t: put((write, (t,))), cancel, meeting="все встречи")
+                    if "запасной" in router.name:
+                        put((write, ("\n(GigaChat недоступен — ответила локальная модель)",)))
                 except Exception as e:
                     error = str(e)
                 put((done, (answer, error)))
