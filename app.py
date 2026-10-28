@@ -49,7 +49,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.27.0"
+APP_VERSION = "7.28.0"
 
 import support
 from support import app_dir, data_dir
@@ -732,7 +732,7 @@ class App(MainWindow):
         except (OSError, AttributeError) as e:
             messagebox.showerror("Открыть файл", f"Не удалось открыть: {e}")
 
-    def toast(self, text, path=None, seconds=25):
+    def toast(self, text, path=None, seconds=25, action=None):
         """Небольшое окно в углу экрана: не мешает, закрывается само."""
         try:
             win = tk.Toplevel(self.root)
@@ -744,6 +744,9 @@ class App(MainWindow):
             row = ttk.Frame(frame); row.pack(anchor="e", pady=(8, 0))
             if path is not None:
                 ttk.Button(row, text="Открыть", command=lambda: (self.open_path(path), win.destroy())).pack(side="left")
+            if action is not None:
+                ttk.Button(row, text=action[0], style="Accent.TButton",
+                           command=lambda: (action[1](), win.destroy())).pack(side="left")
             ttk.Button(row, text="Закрыть", command=win.destroy).pack(side="left", padx=(6, 0))
             win.update_idletasks()
             x = win.winfo_screenwidth() - win.winfo_width() - 24

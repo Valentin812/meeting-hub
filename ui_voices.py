@@ -49,6 +49,11 @@ class VoicesUI:
                                    file=wav.name)
                 if n > known:
                     self.last_event_text = "Голоса определены — подпишите их на вкладке «Голоса»."
+                    if n >= 2 and not manual:
+                        self.toast(f"В записи найдено голосов: {n}, не подписано: {n - known}. "
+                                   "Подпишите их — программа запомнит людей и в следующих встречах "
+                                   "подпишет сама.", seconds=60,
+                                   action=("Подписать", lambda: self.open_voices_tab(wav)))
             self.refresh_records()
             if self.selected == wav:
                 self.show_meeting(wav, force=True)
@@ -80,6 +85,18 @@ class VoicesUI:
     # ------------------------------------------------------------------
     # Вкладка «Голоса»
     # ------------------------------------------------------------------
+    def open_voices_tab(self, wav):
+        wav = Path(wav)
+        self.selected = wav
+        if hasattr(self, "records_tree") and self.records_tree.exists(str(wav)):
+            self.records_tree.select(str(wav))
+        self.show_meeting(wav, force=True)
+        try:
+            self.detail_nb.select(self.voices_tab)
+        except tk.TclError:
+            pass
+        self.show_window()
+
     def build_voices_tab(self, nb):
         self.voices_tab = ttk.Frame(nb, padding=(4, 10, 4, 0))
         nb.add(self.voices_tab, text="Голоса")
@@ -225,17 +242,24 @@ class VoicesUI:
     def save_voice_names(self, wav):
         wav = Path(wav)
         profiles = self.voice_profiles()
-        changed = False
+        changed, confirmed = False, 0
         try:
             for c, var in self._voice_rows:
                 name = var.get().strip()
                 if name != (c.get("name") or ""):
                     voices.name_voice(wav, c["id"], name, profiles)
                     changed = True
+            for c, var in self._voice_rows:                  # узнанные верно: тоже обучают программу
+                if c.get("auto") and var.get().strip() == (c.get("name") or "") and \
+                        voices.confirm_voice(wav, c["id"], profiles):
+                    confirmed += 1
         except voices.VoicesError as e:
             messagebox.showwarning("Голоса", str(e), parent=self.root)
             return
         if not changed:
+            if confirmed:
+                self._journal_note("Голоса подтверждены", f"{wav.name}: {confirmed}", "user", file=wav.name)
+                self.render_voices(wav)
             return
         self._journal_note("Голоса подписаны", wav.name, "user", file=wav.name)
         self._voices_changed(wav)

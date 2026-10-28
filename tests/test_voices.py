@@ -120,6 +120,19 @@ class VoicesTests(unittest.TestCase):
         voices.rematch(w2, self.profiles)
         self.assertEqual(sorted(c["name"] for c in voices.read_speakers(w2)["clusters"]), ["Иван", "Пётр"])
 
+    def test_confirm_auto_voice_adds_training(self):
+        w1 = make_meeting(self.tmp / "c1", [("A", 8), ("B", 8)])
+        sp = voices.analyze(w1, FakeEmbedder(), self.profiles)
+        voices.name_voice(w1, int(sp["assign"]["0"]), "Иван", self.profiles)
+        w2 = make_meeting(self.tmp / "c2", [("A", 8), ("B", 8), ("C", 8)], label="Собеседники")
+        sp2 = voices.analyze(w2, FakeEmbedder(), self.profiles)
+        auto = [c for c in sp2["clusters"] if c["auto"]][0]
+        before = len(self.profiles.people["Иван"])
+        self.assertTrue(voices.confirm_voice(w2, auto["id"], self.profiles))
+        self.assertEqual(len(self.profiles.people["Иван"]), before + 1)
+        self.assertFalse(voices.confirm_voice(w2, auto["id"], self.profiles))     # повторно — нет
+        self.assertEqual(len(sp2["clusters"]), 3)
+
     def test_short_noise_is_not_a_voice_and_you_stays(self):
         wav = make_meeting(self.tmp / "rec", [("A", 8), ("B", 1.2)])
         sp = voices.analyze(wav, FakeEmbedder(), self.profiles)
