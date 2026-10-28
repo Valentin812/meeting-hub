@@ -474,6 +474,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             m.add_command(label="Открыть расшифровку (TXT)", command=lambda: self.open_path(tr_mod.output_paths(wav)[0]))
         if self.summary_path(wav).exists():
             m.add_command(label="Сохранить задачи в CSV…", command=lambda: self.export_tasks(wav))
+        if has_text and self.settings.get("kanban_token"):
+            m.add_command(label="Отправить в Канбан", command=lambda: self.kanban_push(wav, manual=True))
         if wav.exists():
             m.add_command(label="Открыть аудио в другой программе", command=lambda: self.open_path(wav))
         m.add_command(label="Показать в папке", command=lambda: self.show_in_folder(wav))
@@ -1161,6 +1163,23 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         ttk.Button(brow, text="Проверить GigaChat", command=lambda: self.check_giga(g_code.get().strip(), win)).pack(
             side="left")
 
+        ttk.Separator(p).pack(fill="x", pady=(14, 8))
+        ttk.Label(p, text="Канбан", style="H2.TLabel").pack(anchor="w")
+        hint(p, "Готовые встречи (итоги, решения, задачи, расшифровка) попадают во вкладку «Встречи» вашего Канбана. "
+                "Почта и пароль нужны только для подключения и нигде не сохраняются.")
+        k_state = tk.StringVar(value=self.kanban_status_text())
+        ttk.Label(p, textvariable=k_state).pack(anchor="w", padx=(28, 0))
+        k_auto = tk.BooleanVar(value=bool(s.get("kanban_auto", True)))
+        ttk.Checkbutton(p, text="Отправлять каждую готовую встречу автоматически", variable=k_auto).pack(
+            anchor="w", padx=(28, 0), pady=(6, 0))
+        krow = ttk.Frame(p); krow.pack(fill="x", padx=(28, 0), pady=(6, 0))
+        ttk.Button(krow, text="Подключить…", command=lambda: self.kanban_connect_dialog(
+            win, lambda: k_state.set(self.kanban_status_text()))).pack(side="left")
+        ttk.Button(krow, text="Проверить", command=lambda: self.kanban_check(win)).pack(side="left", padx=(8, 0))
+        ttk.Button(krow, text="Отключить", command=lambda: (self.kanban_disconnect(),
+                                                              k_state.set(self.kanban_status_text()))).pack(
+            side="left", padx=(8, 0))
+
         # 4. Хранение
         p = page("Хранение")
         keep_now = int(s.get("keep_audio_days", 0))
@@ -1230,7 +1249,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      record_meetings=self.record_meetings.get(), auto_transcribe=self.auto_transcribe.get(),
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
-                     giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip())
+                     giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip(),
+                     kanban_auto=bool(k_auto.get()))
             for old_key in ("salute_enabled", "salute_key", "salute_scope", "salute_insecure"):
                 s.pop(old_key, None)                      # SaluteSpeech из программы убран
             theme_changed = new_theme != s.get("theme", "system")
