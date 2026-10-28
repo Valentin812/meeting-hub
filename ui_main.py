@@ -124,6 +124,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.rec_btn.pack(side="right", padx=(0, 8))
         self.mute_btn = ttk.Button(header, text="", command=self.toggle_mic_mute)
         self.sysmute_btn = ttk.Button(header, text="", command=self.toggle_system_mute)
+        self.confrec_btn = ttk.Button(header, text="", command=self.toggle_recording_confidential)
         self.update_btn = ttk.Button(header, text="", command=lambda: self.install_found_update())
         self._header = header
         self.substatus = ttk.Label(root, text="", style="Small.TLabel", padding=(18, 0, 18, 10))
@@ -173,6 +174,9 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.proto_btn.pack(side="left")
         self.edit_btn = ttk.Button(btns, text="✎ Название", command=lambda: self.edit_details(self.selected))
         self.edit_btn.pack(side="left", padx=(6, 0))
+        self.conf_btn = ttk.Button(btns, text="🔒 Конфиденциально",
+                                   command=lambda: self.toggle_confidential(self.selected))
+        self.conf_btn.pack(side="left", padx=(6, 0))
         self.more_btn = ttk.Menubutton(btns, text="Ещё", width=6)
         self.more_btn.pack(side="left", padx=(6, 0))
         self.more_menu = tk.Menu(self.more_btn, tearoff=False)
@@ -407,7 +411,9 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             parts.append(meta["meeting"])
         if meta.get("audio_deleted") or not wav.exists():
             parts.append("аудио удалено")
-        if self.is_confidential(wav):
+        closed = self.is_confidential(wav)
+        self.conf_btn.config(text="🔓 Снять «Конфиденциально»" if closed else "🔒 Конфиденциально")
+        if closed:
             parts.append("🔒 Конфиденциально: только локальная обработка")
         sent = self.cloud_log.services_for(stem)
         if sent:
@@ -515,10 +521,6 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             m.add_command(label="Открыть расшифровку (TXT)", command=lambda: self.open_path(tr_mod.output_paths(wav)[0]))
         if self.summary_path(wav).exists():
             m.add_command(label="Сохранить задачи в CSV…", command=lambda: self.export_tasks(wav))
-        m.add_separator()
-        m.add_command(label=("Снять пометку «Конфиденциально»" if self.is_confidential(wav)
-                             else "Пометить «Конфиденциально»"), command=lambda: self.toggle_confidential(wav))
-        m.add_separator()
         if has_text and self.settings.get("kanban_token"):
             m.add_command(label="Отправить в Канбан", command=lambda: self.kanban_push(wav, manual=True))
         if wav.exists():
@@ -1020,12 +1022,16 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             if self.recorder is not None:
                 self.mute_btn.config(text="🎙 Включить микрофон" if self.recorder.mic_muted else "🔇 Выключить микрофон")
                 self.sysmute_btn.config(text="🔊 Писать звук ПК" if self.recorder.system_muted else "🔇 Не писать звук ПК")
+                self.confrec_btn.config(text="🔓 Снять «Конфиденциально»" if self.recorder.confidential
+                                        else "🔒 Конфиденциально")
                 if not self.mute_btn.winfo_ismapped():
                     self.mute_btn.pack(side="right", padx=(0, 8), before=self.rec_btn)
                     self.sysmute_btn.pack(side="right", padx=(0, 8), before=self.mute_btn)
+                    self.confrec_btn.pack(side="right", padx=(0, 8), before=self.sysmute_btn)
             elif self.mute_btn.winfo_ismapped():
                 self.mute_btn.pack_forget()
                 self.sysmute_btn.pack_forget()
+                self.confrec_btn.pack_forget()
             sub = self.last_event_text or ""
             levels = self.recording_levels_text()
             if levels:
