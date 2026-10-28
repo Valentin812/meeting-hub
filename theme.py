@@ -18,20 +18,20 @@ def _pills(ok, rec, busy, meet, off):
 THEMES = {
     "light": dict(
         label="Светлая", dark=False, font="Segoe UI", relief="flat",
-        bg="#e3e8ee", surface="#f1f4f7", text="#1f2933", muted="#556070", faint="#8591a0",
-        border="#c9d1db", accent="#2f6fb3", accent_fg="#ffffff", accent_hover="#255c97",
-        select="#cfdff1", select_fg="#1f2933", hover="#d7dee6", card="#f1f4f7", btn="#f1f4f7",
-        me="#2f6fb3", they="#7a4aa8",
-        pill=_pills(("#d3ecd0", "#1d6b1a"), ("#f6d6d8", "#b3261e"), ("#f3e4b3", "#6e5200"),
-                    ("#d3e2f3", "#1f5a99"), ("#dbe0e6", "#4b5563"))),
+        bg="#e8ecf2", surface="#f2f5f9", text="#18212f", muted="#566275", faint="#8a94a6",
+        border="#cfd7e3", accent="#3b5bdb", accent_fg="#ffffff", accent_hover="#2f49b5",
+        select="#d9e2fa", select_fg="#18212f", hover="#dde3ec", card="#f2f5f9", btn="#f2f5f9",
+        me="#3b5bdb", they="#9c36b5",
+        pill=_pills(("#dcf5e3", "#17653a"), ("#fde2e1", "#b42318"), ("#fdf0c9", "#7a5200"),
+                    ("#e1e8fd", "#2b45a8"), ("#e9edf3", "#4a5568"))),
     "dark": dict(
         label="Тёмная", dark=True, font="Segoe UI", relief="flat",
-        bg="#2b303a", surface="#343a46", text="#e6e9ee", muted="#aab2bf", faint="#7f8896",
-        border="#4a5260", accent="#6cb6ff", accent_fg="#10243a", accent_hover="#8cc7ff",
-        select="#3f5670", select_fg="#ffffff", hover="#3b4250", card="#363c49", btn="#3d4452",
-        me="#7cc0ff", they="#d2b0ff",
-        pill=_pills(("#2f4d33", "#a6e3a1"), ("#5c3436", "#ffb0ad"), ("#56472b", "#f5d98a"),
-                    ("#314862", "#a9d1ff"), ("#444b59", "#d0d6df"))),
+        bg="#282d38", surface="#323846", text="#e8ebf1", muted="#a9b2c1", faint="#7b8596",
+        border="#444c5c", accent="#8097ff", accent_fg="#0e1430", accent_hover="#9fb0ff",
+        select="#323f6b", select_fg="#ffffff", hover="#3a4150", card="#323846", btn="#3a4150",
+        me="#8fb4ff", they="#d8b4fe",
+        pill=_pills(("#25472f", "#a6e3b4"), ("#582f33", "#ffb4b0"), ("#51432a", "#f5d98a"),
+                    ("#2d3f6a", "#b4c8ff"), ("#3a4150", "#d0d6df"))),
     "latte": dict(
         label="Латте", dark=False, font="Segoe UI", relief="flat",
         bg="#efe3d3", surface="#f8f0e5", text="#3e2c22", muted="#6f5849", faint="#a28f80",
@@ -129,7 +129,7 @@ def _configure_ttk(st, pal):
     st.configure("TSeparator", background=br)
     st.configure("TButton", background=pal["btn"], foreground=tx, bordercolor=brd, lightcolor=light,
                  darkcolor=dark3, borderwidth=thick, relief="raised" if kind == "win95" else "flat",
-                 padding=(12, 6), anchor="center", focuscolor=pal["btn"])
+                 padding=(14, 8) if kind == "flat" else (12, 6), anchor="center", focuscolor=pal["btn"])
     st.map("TButton", background=[("pressed", pal["hover"]), ("active", pal["hover"]), ("disabled", bg)],
            foreground=[("disabled", pal["faint"])],
            relief=[("pressed", "sunken")] if kind == "win95" else [])
@@ -158,12 +158,12 @@ def _configure_ttk(st, pal):
     st.map("TRadiobutton", background=[("active", bg)], indicatorcolor=[("selected", pal["accent"])])
     st.configure("TNotebook", background=bg, bordercolor=br, lightcolor=bg, darkcolor=bg, tabmargins=(0, 4, 0, 0),
                  borderwidth=thick)
-    st.configure("TNotebook.Tab", background=pal["hover"], foreground=pal["muted"], padding=(16, 7),
+    st.configure("TNotebook.Tab", background=pal["hover"], foreground=pal["muted"], padding=(18, 9) if kind == "flat" else (16, 7),
                  bordercolor=br, lightcolor=pal["hover"], darkcolor=pal["hover"], borderwidth=thick)
     st.map("TNotebook.Tab", background=[("selected", sf), ("active", pal["select"])],
            foreground=[("selected", tx), ("active", pal["select_fg"])],
            lightcolor=[("selected", sf)], darkcolor=[("selected", sf)])
-    st.configure("Treeview", background=sf, fieldbackground=sf, foreground=tx, bordercolor=br, rowheight=30,
+    st.configure("Treeview", background=sf, fieldbackground=sf, foreground=tx, bordercolor=br, rowheight=34 if kind == "flat" else 30,
                  font=(f, 10, bold), lightcolor=sf, darkcolor=sf, borderwidth=thick)
     st.configure("Meetings.Treeview", rowheight=30, font=(f, 10, bold))
     st.configure("Tasks.Treeview", rowheight=28)
