@@ -433,7 +433,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             if st["state"] == "running":
                 text = f"Расшифровываю: {int(st['progress'] * 100)}%"
             if st["state"] == "downloading":
-                total = tr_mod.MODEL_MB.get(self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL), 0)
+                total = st.get("total_mb") or tr_mod.MODEL_MB.get(self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL), 0)
                 text = f"Скачиваю модель распознавания: {int(st.get('downloaded_mb') or 0)} из {total} МБ (один раз)"
             cmd, label = (lambda: self.cancel_transcription(wav)), "Отменить"
         elif key == "busy":
@@ -1096,23 +1096,33 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         model = tk.StringVar(value=s.get("whisper_model", tr_mod.DEFAULT_MODEL))
         lang = tk.StringVar(value=s.get("language", "ru"))
         llm = tk.StringVar(value=s.get("ollama_model", self.default_llm))
+        engines = {"GigaAM (русский, рекомендуется)": "gigaam", "Whisper": "whisper"}
+        engine = tk.StringVar(value=next((k for k, v in engines.items() if v == s.get("asr_engine", "gigaam")),
+                                         "GigaAM (русский, рекомендуется)"))
         grid = ttk.Frame(p); grid.pack(fill="x")
-        ttk.Label(grid, text="Качество распознавания").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(grid, text="Распознавание речи").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Combobox(grid, textvariable=engine, values=list(engines), state="readonly",
+                     width=32).grid(row=0, column=1, sticky="w", padx=10)
+        ttk.Label(grid, style="Small.TLabel", wraplength=520, justify="left", text=(
+            "GigaAM — модель Сбера для русского языка, работает на вашем компьютере (при первом включении "
+            "скачивается около 230 МБ). Если она не сработает или язык не русский, программа сама использует Whisper."
+        )).grid(row=1, column=0, columnspan=2, sticky="w")
+        ttk.Label(grid, text="Качество Whisper").grid(row=3, column=0, sticky="w", pady=(12, 4))
         ttk.Combobox(grid, textvariable=model, values=list(tr_mod.MODELS), state="readonly",
-                     width=12).grid(row=0, column=1, sticky="w", padx=10)
+                     width=12).grid(row=3, column=1, sticky="w", padx=10, pady=(12, 4))
         mhint = ttk.Label(grid, style="Small.TLabel")
-        mhint.grid(row=1, column=0, columnspan=2, sticky="w")
+        mhint.grid(row=4, column=0, columnspan=2, sticky="w")
         model.trace_add("write", lambda *_: mhint.config(text=tr_mod.MODELS.get(model.get(), "")))
         mhint.config(text=tr_mod.MODELS.get(model.get(), ""))
         ttk.Label(grid, text="Язык встреч").grid(row=2, column=0, sticky="w", pady=(12, 4))
         ttk.Combobox(grid, textvariable=lang, values=["ru", "en", "auto"], state="readonly",
                      width=12).grid(row=2, column=1, sticky="w", padx=10, pady=(12, 4))
-        ttk.Label(grid, text="Модель для итогов (Ollama)").grid(row=3, column=0, sticky="w", pady=(12, 4))
-        ttk.Entry(grid, textvariable=llm, width=18).grid(row=3, column=1, sticky="w", padx=10, pady=(12, 4))
+        ttk.Label(grid, text="Модель для итогов (Ollama)").grid(row=5, column=0, sticky="w", pady=(12, 4))
+        ttk.Entry(grid, textvariable=llm, width=18).grid(row=5, column=1, sticky="w", padx=10, pady=(12, 4))
         ttk.Button(grid, text="Проверить", command=lambda: self.check_ollama(llm.get())).grid(
-            row=3, column=2, sticky="w", pady=(12, 4))
+            row=5, column=2, sticky="w", pady=(12, 4))
         ttk.Button(grid, text="Установить ИИ…", command=self.open_ai_setup).grid(
-            row=3, column=3, sticky="w", padx=(8, 0), pady=(12, 4))
+            row=5, column=3, sticky="w", padx=(8, 0), pady=(12, 4))
         voices_on = tk.BooleanVar(value=self.voices_wanted())
         vrow = ttk.Frame(p); vrow.pack(anchor="w", pady=(14, 0))
         ttk.Checkbutton(vrow, text="Определять, кто говорит (по голосу)", variable=voices_on).pack(side="left")
@@ -1212,7 +1222,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                 self.auto_detect.set(bool(detect.get()))
                 self.toggle_auto_detect()
             self.auto_pause.set(bool(pause.get()))
-            old = (s.get("whisper_model", tr_mod.DEFAULT_MODEL), s.get("language", "ru"),
+            old = (s.get("whisper_model", tr_mod.DEFAULT_MODEL), s.get("language", "ru"), s.get("asr_engine", "gigaam"),
                    bool(s.get("salute_enabled")), s.get("giga_code", ""), bool(s.get("salute_insecure")))
             if s_on.get() and not s.get("salute_enabled") and not messagebox.askokcancel(
                     "SaluteSpeech", "Записи встреч будут отправляться в облако Сбера для распознавания.\n\n"
@@ -1224,7 +1234,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                 g_on.set(False)
             new_theme = dict(self.THEMES)[theme_var.get()]
             s.update(close_to_tray=bool(tray_var.get()), check_updates=bool(upd.get()),
-                     keep_audio_days=dict(self.KEEP_CHOICES)[keep.get()], whisper_model=model.get(),
+                     keep_audio_days=dict(self.KEEP_CHOICES)[keep.get()], whisper_model=model.get(), asr_engine=engines[engine.get()],
                      language=lang.get(), ollama_model=llm.get().strip() or self.default_llm,
                      record_meetings=self.record_meetings.get(), auto_transcribe=self.auto_transcribe.get(),
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
@@ -1240,7 +1250,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             tq = getattr(self, "tq", None)
             if tq is not None:
                 tq.language = None if lang.get() == "auto" else lang.get()
-                if old != (model.get(), lang.get(), bool(s_on.get()), g_code.get().strip(),
+                if old != (model.get(), lang.get(), engines[engine.get()], bool(s_on.get()), g_code.get().strip(),
                            bool(s_insecure.get())) and not tq.busy():
                     tq.engine = None
             self.last_event_text = "Настройки сохранены."

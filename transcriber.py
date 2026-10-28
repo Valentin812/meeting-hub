@@ -31,7 +31,7 @@ MODELS = {
     "medium": "лучшее качество, медленно на слабом ПК (~1,5 ГБ)",
 }
 DEFAULT_MODEL = "small"
-MODEL_MB = {"tiny": 75, "base": 145, "small": 465, "medium": 1530}
+MODEL_MB = {"tiny": 75, "base": 145, "small": 465, "medium": 1530, "gigaam": 230}
 MAX_TURN_CHARS = 280      # длиннее не склеиваем: в протоколе остаются метки времени по ходу речи
 SILENCE_RMS = 0.002       # канал тише этого — не расшифровываем вовсе
 
@@ -304,6 +304,7 @@ class TranscriptionQueue:
         present = getattr(engine, "model_present", lambda: True)()
         total = MODEL_MB.get(getattr(engine, "size", ""), 0)
         st["state"] = "downloading" if not present else "loading"
+        st["total_mb"] = total
         done = threading.Event()
 
         def watch():
