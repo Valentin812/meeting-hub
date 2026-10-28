@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.17.0"
+APP_VERSION = "7.18.0"
 
 import support
 from support import app_dir, data_dir
@@ -631,6 +631,11 @@ class App(MainWindow):
         if st["state"] == "done":
             self._journal_note("Расшифровка готова", name, "auto", file=name)
             self.last_event_text = ""
+            try:
+                import titles
+                titles.apply_initial_name(key)           # название из окна встречи или слов разговора + дата
+            except Exception:
+                self.log.exception("Название встречи не записано")
 
             def after():
                 if self.auto_summary.get():

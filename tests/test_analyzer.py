@@ -144,7 +144,7 @@ class AutoNameTests(unittest.TestCase):
             res = {"title": "Планёрка по релизу", "description": "Обсудили сроки."}
             self.assertTrue(importer.auto_name(wav, res))
             m = json.loads(meta.read_text(encoding="utf-8"))
-            self.assertEqual((m["title"], m["description"], m["window"]), ("Планёрка по релизу", "Обсудили сроки.",
+            self.assertEqual((m["title"], m["description"], m["window"]), ("Планёрка по релизу · 26.10.2026", "Обсудили сроки.",
                                                                            "Room | MRM meet"))
             # пользователь поменял название — повторные итоги его не затрут, описание обновится
             importer.write_meta(wav, {"title": "Моё название", "title_by_user": True})
