@@ -402,6 +402,19 @@ def name_voice(wav, cluster_id, name, profiles):
     return sp
 
 
+def confirm_voice(wav, cluster_id, profiles):
+    """Пользователь подтвердил, что голос узнан верно: отпечаток этой встречи тоже идёт в обучение."""
+    sp = read_speakers(wav)
+    for c in (sp or {}).get("clusters", []):
+        if c["id"] == cluster_id and c.get("auto") and (c.get("name") or "").strip() and c.get("centroid"):
+            profiles.learn(c["name"], [np.asarray(c["centroid"], dtype=np.float32)])
+            profiles.save()
+            c["auto"] = False
+            _write_json(speakers_path(wav), sp)
+            return True
+    return False
+
+
 def rematch(wav, profiles):
     """Подписать ещё не названные голоса встречи по сохранённым людям (звук не нужен)."""
     wav = Path(wav)
