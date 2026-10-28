@@ -18,7 +18,6 @@ class ChatUI:
         self.chat_histories = {}
         self.chat_busy = False
         self.chat_cancel = threading.Event()
-        self.chat_all = tk.BooleanVar(value=False)
         pal = self.pal
         self.chat_log = tk.Text(tab, wrap="word", height=10)
         theme.text_style(self.chat_log, pal)
@@ -27,7 +26,6 @@ class ChatUI:
         self.chat_tags()
         opts = ttk.Frame(tab)
         opts.pack(fill="x", pady=(6, 0))
-        ttk.Checkbutton(opts, text="по всем встречам (только по итогам)", variable=self.chat_all).pack(side="left")
         ttk.Button(opts, text="Очистить", command=self.chat_clear).pack(side="right")
         row = ttk.Frame(tab)
         row.pack(fill="x", pady=(6, 0))
@@ -89,10 +87,8 @@ class ChatUI:
 
     # ---- вопрос
     def _chat_context(self, wav, question):
-        if self.chat_all.get() or wav is None:
-            folder = Path(wav).parent if wav else self.rec_folder
-            skip = privacy.confidential_stems(folder, self.privacy_words()) if self.cloud_chat_on() else ()
-            return chat.all_meetings_context(folder, question, skip=skip)
+        if wav is None:
+            return ""
         wav = Path(wav)
         meta, result, text = {}, {}, ""
         try:
@@ -141,8 +137,8 @@ class ChatUI:
             try:
                 answer = self.llm_router(model).stream(
                     messages, lambda t: put((self._chat_piece, (key, t))), self.chat_cancel,
-                    meeting=(Path(wav).stem if wav and not self.chat_all.get() else "все встречи"),
-                    local_only=bool(wav) and not self.chat_all.get() and self.is_confidential(wav))
+                    meeting=Path(wav).stem if wav else None,
+                    local_only=bool(wav) and self.is_confidential(wav))
             except Exception as e:
                 error = str(e)
             put((self._chat_done, (key, answer, error)))
@@ -167,3 +163,94 @@ class ChatUI:
         hist.append({"role": "assistant", "content": answer.strip() or "(пустой ответ)"})
         if key == self._chat_key():
             self._chat_write("\n\n")
+
+
+    # ---- отдельный чат по всем встречам
+    def open_all_chat(self):
+        old = getattr(self, "all_chat_win", None)
+        if old is not None and old.winfo_exists():
+            old.lift()
+            return
+        win = self.all_chat_win = tk.Toplevel(self.root)
+        win.title("Чат по всем встречам")
+        win.geometry("720x560")
+        frame = ttk.Frame(win, padding=12)
+        frame.pack(fill="both", expand=True)
+        log = tk.Text(frame, wrap="word", height=10)
+        theme.text_style(log, self.pal)
+        log.tag_configure("me", foreground=self.pal["me"], font=(theme.FONT, 10, "bold"))
+        log.tag_configure("ai", foreground=self.pal["they"], font=(theme.FONT, 10, "bold"))
+        log.tag_configure("hint", foreground=self.pal["muted"])
+        log.pack(fill="both", expand=True)
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=(8, 0))
+        var = tk.StringVar()
+        entry = ttk.Entry(row, textvariable=var)
+        entry.pack(side="left", fill="x", expand=True)
+        btn = ttk.Button(row, text="Спросить", style="Accent.TButton")
+        btn.pack(side="left", padx=(6, 0))
+        note = ("Отвечает по итогам всех встреч. "
+                + ("Конфиденциальные встречи не используются. " if self.cloud_chat_on() else "")
+                + "Модель может ошибаться — важное проверяйте.")
+        ttk.Label(frame, text=note, style="Small.TLabel", wraplength=680, justify="left").pack(anchor="w", pady=(6, 0))
+        state = {"busy": False, "hist": []}
+
+        def write(text, tag=None):
+            if not log.winfo_exists():
+                return
+            log.config(state="normal")
+            log.insert("end", text, tag or ())
+            log.see("end")
+            log.config(state="disabled")
+
+        write("Спросите, например: «Что решили по бюджету?», «Какие у меня задачи на этой неделе?»\n", "hint")
+        log.config(state="disabled")
+        cancel = threading.Event()
+        put = self._ui_calls.put
+
+        def done(answer, error):
+            state["busy"] = False
+            if btn.winfo_exists():
+                btn.config(state="normal")
+            if error:
+                write("Не удалось получить ответ: " + error[:150] + "\n\n", "hint")
+                if state["hist"] and state["hist"][-1]["role"] == "user":
+                    state["hist"].pop()
+                return
+            state["hist"].append({"role": "assistant", "content": answer.strip() or "(пустой ответ)"})
+            write("\n\n")
+
+        def send(_e=None):
+            question = var.get().strip()
+            if not question or state["busy"]:
+                return
+            skip = privacy.confidential_stems(self.rec_folder, self.privacy_words()) if self.cloud_chat_on() else ()
+            context = chat.all_meetings_context(self.rec_folder, question, skip=skip)
+            if not context.strip():
+                write("Подходящих итогов встреч не нашлось.\n", "hint")
+                return
+            messages = chat.build_messages(context, state["hist"], question)
+            state["hist"].append({"role": "user", "content": question})
+            var.set("")
+            write("Вы: ", "me")
+            write(question + "\n\n")
+            write("ИИ: ", "ai")
+            state["busy"] = True
+            btn.config(state="disabled")
+            cancel.clear()
+            model = self.settings.get("ollama_model") or self.default_llm
+
+            def work():
+                answer, error = "", ""
+                try:
+                    answer = self.llm_router(model).stream(
+                        messages, lambda t: put((write, (t,))), cancel, meeting="все встречи")
+                except Exception as e:
+                    error = str(e)
+                put((done, (answer, error)))
+            threading.Thread(target=work, name="ai-chat-all", daemon=True).start()
+
+        btn.config(command=send)
+        entry.bind("<Return>", send)
+        win.bind("<Destroy>", lambda e: cancel.set() if e.widget is win else None)
+        entry.focus_set()
