@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.14.0"
+APP_VERSION = "7.15.0"
 
 import support
 from support import app_dir, data_dir
@@ -502,11 +502,9 @@ class App(MainWindow):
 
             def factory():
                 local = tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
-                if self.settings.get("salute_enabled") and (self.settings.get("salute_key") or "").strip():
+                client = self._salute_client()
+                if self.settings.get("salute_enabled") and client is not None:
                     import salute
-                    client = salute.SaluteClient(self.settings["salute_key"], self.settings.get("salute_scope") or
-                                                 "SALUTE_SPEECH_PERS",
-                                                 verify_tls=not self.settings.get("salute_insecure", False))
                     return salute.SaluteWithFallback(client, local, notify=self._salute_fallback)
                 return local
 
@@ -552,12 +550,30 @@ class App(MainWindow):
         self._ui_calls.put((lambda: self._journal_note(
             "SaluteSpeech недоступен", f"{reason}. Расшифровываю локальной моделью.", "auto"), ()))
 
-    def check_salute(self, key, scope, insecure, parent=None):
+    def _salute_client(self, code=None, insecure=None, timeout=60):
+        """SaluteSpeech: по коду доступа через сервер команды (ключ Сбера не нужен); старый ключ из настроек —
+        только как запасной путь для тех, кто вводил его раньше."""
+        import salute
+        s = self.settings
+        code = (s.get("giga_code") if code is None else code) or ""
+        insecure = s.get("salute_insecure", False) if insecure is None else insecure
+        if code.strip():
+            return salute.SaluteClient("", verify_tls=not insecure, timeout=timeout, token_source=
+                                       salute.ProxyTokenSource(code, s.get("giga_proxy_url") or salute.PROXY_URL))
+        if (s.get("salute_key") or "").strip():
+            return salute.SaluteClient(s["salute_key"], s.get("salute_scope") or "SALUTE_SPEECH_PERS",
+                                       verify_tls=not insecure, timeout=timeout)
+        return None
+
+    def check_salute(self, code, insecure, parent=None):
         import salute
 
         def worker():
             try:
-                msg = salute.SaluteClient(key, scope, verify_tls=not insecure, timeout=20).check()
+                client = self._salute_client(code, insecure, timeout=20)
+                if client is None:
+                    raise salute.SaluteError("не указан код доступа")
+                msg = client.check()
                 show = messagebox.showinfo
             except Exception as e:
                 msg, show = f"Не получилось: {e}", messagebox.showwarning
