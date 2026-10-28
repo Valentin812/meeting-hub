@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.20.0"
+APP_VERSION = "7.21.0"
 
 import support
 from support import app_dir, data_dir
@@ -583,8 +583,119 @@ class App(MainWindow):
             self._journal_note("Протокол готов", path.name, "auto", file=path.name)
             if notify:
                 self.toast(notify, path)
+            if self.settings.get("kanban_token") and self.settings.get("kanban_auto", True):
+                self.kanban_push(wav)
         self.refresh_records()
         return path
+
+    # ------------------------------------------------------------------
+    # Канбан: отправка встреч во вкладку «Встречи»
+    # ------------------------------------------------------------------
+    def kanban_status_text(self):
+        if not self.settings.get("kanban_token"):
+            return "Не подключён."
+        return "Подключён: " + (self.settings.get("kanban_email") or "аккаунт Канбана")
+
+    def kanban_push(self, wav, manual=False):
+        token = self.settings.get("kanban_token")
+        if not token:
+            return
+        import kanban_sync
+
+        def work():
+            try:
+                kanban_sync.push(token, wav)
+                note = ("Встреча отправлена в Канбан", Path(wav).stem)
+            except kanban_sync.KanbanError as e:
+                note = ("Канбан: встреча не отправлена", str(e))
+            except Exception as e:
+                self.log.exception("Отправка в Канбан")
+                note = ("Канбан: встреча не отправлена", f"{type(e).__name__}: {e}")
+            ok = note[0].startswith("Встреча")
+
+            def done():
+                self._journal_note(note[0], note[1], "user" if manual else "auto")
+                if manual:
+                    (messagebox.showinfo if ok else messagebox.showwarning)(
+                        "Канбан", "Встреча отправлена во вкладку «Встречи»." if ok else note[1], parent=self.root)
+            self._ui_calls.put((done, ()))
+        threading.Thread(target=work, name="kanban-push", daemon=True).start()
+
+    def kanban_disconnect(self):
+        for key in ("kanban_token", "kanban_email"):
+            self.settings.pop(key, None)
+        self.save_settings()
+
+    def kanban_check(self, parent=None):
+        import kanban_sync
+        token = self.settings.get("kanban_token")
+
+        def work():
+            try:
+                msg, show = "Подключение работает: " + kanban_sync.check(token), messagebox.showinfo
+            except Exception as e:
+                msg, show = f"Не получилось: {e}", messagebox.showwarning
+            self._ui_calls.put((lambda: show("Канбан", msg, parent=parent or self.root), ()))
+        threading.Thread(target=work, name="kanban-check", daemon=True).start()
+
+    def kanban_connect_dialog(self, parent, on_done=None):
+        import kanban_sync
+        win = tk.Toplevel(parent)
+        win.title("Подключить Канбан")
+        win.transient(parent)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=18)
+        frm.pack(fill="both", expand=True)
+        email, password, status = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        ttk.Label(frm, text="Почта аккаунта Канбана").pack(anchor="w")
+        e1 = ttk.Entry(frm, textvariable=email, width=38)
+        e1.pack(fill="x", pady=(2, 8))
+        ttk.Label(frm, text="Пароль").pack(anchor="w")
+        ttk.Entry(frm, textvariable=password, show="•", width=38).pack(fill="x", pady=(2, 8))
+        ttk.Label(frm, text="Пароль используется один раз для получения ключа доступа и нигде не сохраняется.",
+                  style="Small.TLabel", wraplength=340, justify="left").pack(anchor="w")
+        ttk.Label(frm, textvariable=status, foreground="#b00020", wraplength=340, justify="left").pack(
+            anchor="w", pady=(8, 0))
+        row = ttk.Frame(frm)
+        row.pack(fill="x", pady=(12, 0))
+        btn = ttk.Button(row, text="Подключить", style="Accent.TButton")
+        btn.pack(side="right")
+        ttk.Button(row, text="Отмена", command=win.destroy).pack(side="right", padx=(0, 8))
+
+        def finish(result, error):
+            if not win.winfo_exists():
+                return
+            btn.config(state="normal")
+            if error:
+                status.set(error)
+                return
+            token, mail = result
+            self.settings.update(kanban_token=token, kanban_email=mail)
+            self.save_settings()
+            win.destroy()
+            if on_done:
+                on_done()
+            messagebox.showinfo("Канбан", f"Подключено: {mail}.\nГотовые встречи будут уходить во вкладку «Встречи».",
+                                parent=parent)
+
+        def go():
+            mail, pw = email.get(), password.get()
+            btn.config(state="disabled")
+            status.set("Подключаюсь…")
+
+            def work():
+                try:
+                    result, error = kanban_sync.connect(mail, pw), ""
+                except kanban_sync.KanbanError as e:
+                    result, error = None, str(e)
+                except Exception as e:
+                    result, error = None, f"{type(e).__name__}: {e}"
+                self._ui_calls.put((lambda: finish(result, error), ()))
+            threading.Thread(target=work, name="kanban-connect", daemon=True).start()
+        btn.config(command=go)
+        win.bind("<Return>", lambda _e: go())
+        win.bind("<Escape>", lambda _e: win.destroy())
+        e1.focus_set()
 
     def open_path(self, path):
         try:
