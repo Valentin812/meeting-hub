@@ -121,6 +121,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.rec_btn = ttk.Button(header, text="●  Записать", style="Accent.TButton",
                                   command=self.toggle_recording_button)
         self.rec_btn.pack(side="right", padx=(0, 8))
+        self.mute_btn = ttk.Button(header, text="", command=self.toggle_mic_mute)
         self.update_btn = ttk.Button(header, text="", command=lambda: self.install_found_update())
         self._header = header
         self.substatus = ttk.Label(root, text="", style="Small.TLabel", padding=(18, 0, 18, 10))
@@ -969,6 +970,12 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             elif self.work.winfo_ismapped():
                 self.work.pack_forget()
             self.rec_btn.config(text="■  Остановить" if self.recorder is not None else "●  Записать")
+            if self.recorder is not None:
+                self.mute_btn.config(text="🎙 Включить микрофон" if self.recorder.mic_muted else "🔇 Выключить микрофон")
+                if not self.mute_btn.winfo_ismapped():
+                    self.mute_btn.pack(side="right", padx=(0, 8), before=self.rec_btn)
+            elif self.mute_btn.winfo_ismapped():
+                self.mute_btn.pack_forget()
             sub = self.last_event_text or ""
             levels = self.recording_levels_text()
             if levels:

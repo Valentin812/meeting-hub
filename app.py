@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.19.0"
+APP_VERSION = "7.20.0"
 
 import support
 from support import app_dir, data_dir
@@ -901,6 +901,19 @@ class App(MainWindow):
         else:
             self.start_recording("Пользователь начал запись", "user", by_meeting=self.detector.in_meeting)
 
+    def toggle_mic_mute(self):
+        """Выключить/включить свой голос в записи (участники вас слышат как обычно)."""
+        rec = self.recorder
+        if rec is None:
+            return
+        rec.set_mic_muted(not rec.mic_muted)
+        self._journal_note("Микрофон в записи " + ("выключен" if rec.mic_muted else "включён"),
+                           "Ваш голос не записывается" if rec.mic_muted else "Ваш голос снова записывается",
+                           "user")
+        self.last_event_text = ("Ваш микрофон в записи выключен." if rec.mic_muted
+                                else "Ваш микрофон в записи включён.")
+        self.refresh_status()
+
     def ensure_recording_consent(self):
         if self.settings.get("recording_consent"):
             return True
@@ -1412,6 +1425,8 @@ class App(MainWindow):
             self.tray = tray_mod.Tray(on_open=lambda: put((self.show_window, ())),
                                       on_record=lambda: put((self.toggle_recording_button, ())),
                                       on_quit=lambda: put((self.quit_app, ())),
+                                      on_mute=lambda: put((self.toggle_mic_mute, ())),
+                                      is_muted=lambda: bool(self.recorder and self.recorder.mic_muted),
                                       is_recording=lambda: self.recorder is not None,
                                       elapsed=lambda: self.recorder.elapsed() if self.recorder else 0.0).start()
         except Exception:

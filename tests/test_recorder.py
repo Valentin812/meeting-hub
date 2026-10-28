@@ -100,6 +100,26 @@ class Realtime(Base):
         self.assertEqual(meta["status"], "saved")
         self.assertEqual(meta["meeting"], "Google Meet")
 
+    def test_mic_mute_records_silence_only_in_mic_track(self):
+        rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.5), "system": ToneSource(-0.25)}),
+                            rate=RATE, block_sec=0.1)
+        rec.start({})
+        time.sleep(0.8)
+        rec.set_mic_muted(True)
+        time.sleep(1.2)
+        rec.set_mic_muted(False)
+        time.sleep(0.8)
+        result = rec.stop()
+        data, _ = read_stereo(result["path"])
+        mic = np.abs(data[:, 0].astype(np.int32))
+        self.assertGreater(mic[: int(0.5 * RATE)].max(), 10000)            # до мьюта голос есть
+        mid = slice(int(1.1 * RATE), int(1.9 * RATE))
+        self.assertEqual(int(mic[mid].max()), 0)                           # во время мьюта тишина
+        self.assertTrue(np.all(data[mid, 1] < -7000))                      # звук собеседников записан
+        self.assertGreater(mic[-int(0.4 * RATE):].max(), 10000)            # после — снова голос
+        meta = json.loads(result["path"].with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertGreater(meta["mic_muted_sec"], 0.8)
+
     def test_silent_loopback_is_padded_and_stop_is_prompt(self):
         loop = SilentLoopback()
         rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.3), "system": loop}), rate=RATE, block_sec=0.1)
