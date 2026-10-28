@@ -49,7 +49,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.25.0"
+APP_VERSION = "7.26.0"
 
 import support
 from support import app_dir, data_dir
@@ -1054,6 +1054,18 @@ class App(MainWindow):
                                 else "Ваш микрофон в записи включён.")
         self.refresh_status()
 
+    def toggle_recording_confidential(self):
+        """Во время встречи: пометить её конфиденциальной (или снять пометку)."""
+        rec = self.recorder
+        if rec is None:
+            return
+        rec.set_confidential(not rec.confidential)
+        self._journal_note("Встреча помечена как конфиденциальная" if rec.confidential
+                           else "Пометка «Конфиденциально» снята", "Во время записи", "user")
+        self.last_event_text = ("Встреча конфиденциальная: итоги только локально, в облако не уйдёт." if rec.confidential
+                                else "Пометка «Конфиденциально» снята.")
+        self.refresh_status()
+
     def toggle_system_mute(self):
         """Не писать звук компьютера (собеседники и системные звуки) / снова писать."""
         rec = self.recorder
@@ -1582,6 +1594,8 @@ class App(MainWindow):
                                       is_muted=lambda: bool(self.recorder and self.recorder.mic_muted),
                                       on_mute_system=lambda: put((self.toggle_system_mute, ())),
                                       is_system_muted=lambda: bool(self.recorder and self.recorder.system_muted),
+                                      on_confidential=lambda: put((self.toggle_recording_confidential, ())),
+                                      is_confidential=lambda: bool(self.recorder and self.recorder.confidential),
                                       is_recording=lambda: self.recorder is not None,
                                       elapsed=lambda: self.recorder.elapsed() if self.recorder else 0.0).start()
         except Exception:

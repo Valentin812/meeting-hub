@@ -120,6 +120,18 @@ class Realtime(Base):
         meta = json.loads(result["path"].with_suffix(".json").read_text(encoding="utf-8"))
         self.assertGreater(meta["mic_muted_sec"], 0.8)
 
+    def test_confidential_mark_during_recording(self):
+        rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.5), "system": ToneSource(-0.25)}),
+                            rate=RATE, block_sec=0.1)
+        rec.start({})
+        time.sleep(0.3)
+        rec.set_confidential(True)
+        live = json.loads((self.dir / f"{rec.stem}.json").read_text(encoding="utf-8"))
+        self.assertTrue(live["confidential"])                              # метка на диске сразу
+        result = rec.stop()
+        meta = json.loads(result["path"].with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertTrue(meta["confidential"])                              # и после остановки
+
     def test_system_mute_silences_only_system_track(self):
         rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.5), "system": ToneSource(-0.25)}),
                             rate=RATE, block_sec=0.1)

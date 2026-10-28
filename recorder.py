@@ -614,6 +614,16 @@ class AudioRecorder:
         return {"path": out, "duration": target / self.rate, "errors": errors,
                 "trimmed": max(0.0, t_stop - end)}
 
+    @property
+    def confidential(self):
+        return bool(self.meta.get("confidential"))
+
+    def set_confidential(self, value):
+        """Пометить идущую запись конфиденциальной: метка сразу пишется в .json рядом с записью."""
+        self.meta["confidential"] = bool(value)
+        if self.running:
+            self._write_meta()
+
     def _write_meta(self):
         path = self.folder / f"{self.stem}.json"
         tmp = path.with_name(path.name + ".tmp")
