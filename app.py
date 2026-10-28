@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.18.0"
+APP_VERSION = "7.19.0"
 
 import support
 from support import app_dir, data_dir
@@ -374,6 +374,7 @@ class App(MainWindow):
         self.start_tray()
         import shutil
         shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
+        self.root.after(5000, self.backfill_titles)
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
         self.root.after(20 * 1000, self._update_timer)
         self.root.after(60 * 1000, lambda: updater.mark_code_good(self.data_dir))   # новый код продержался минуту
@@ -652,6 +653,25 @@ class App(MainWindow):
         self.refresh_records()
         self.refresh_status()
 
+    def backfill_titles(self):
+        """Один раз: дать названия старым записям без названия (ничего не удаляется, ручные названия целы)."""
+        if self.settings.get("titles_backfilled"):
+            return
+
+        def work():
+            try:
+                import titles
+                n = titles.backfill(self.rec_folder)
+            except Exception:
+                self.log.exception("Названия старых записей")
+                return
+            self.settings["titles_backfilled"] = True
+            self.save_settings()
+            if n:
+                self._ui_calls.put((lambda: (self.refresh_records(), self._journal_note(
+                    "Названия старых записей", f"Присвоено названий: {n}", "auto")), ()))
+        threading.Thread(target=work, name="titles", daemon=True).start()
+
     def housekeeping(self):
         """Раз в сутки: удалить старое аудио, у которого есть расшифровка."""
         days = int(self.settings.get("keep_audio_days", 0))
@@ -740,10 +760,7 @@ class App(MainWindow):
         if what == "hide" or getattr(self, "_offered_version", None) == version:
             return
         self._offered_version = version
-        self.update_toast(found)
-        if self.tray is not None:
-            self.tray.notify(f"Вышла версия {version}. Нажмите «Обновить сейчас» в окошке у часов.",
-                             "Meeting Hub: обновление")
+        self.update_toast(found)                          # одно окошко с кнопками, без второго уведомления
 
     def update_toast(self, found):
         version, asset, page = found
@@ -879,6 +896,8 @@ class App(MainWindow):
     def toggle_recording_button(self):
         if self.recorder is not None:
             self.stop_recording("Пользователь остановил запись", "user")
+            if self.detector.state in (IN_MEETING, ENDING):
+                self.user_action("manual_end")             # вручную остановил — «встреча закончилась?» не спрашиваем
         else:
             self.start_recording("Пользователь начал запись", "user", by_meeting=self.detector.in_meeting)
 

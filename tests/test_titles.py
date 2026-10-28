@@ -80,5 +80,30 @@ class TitleTests(unittest.TestCase):
         self.assertEqual(titles.apply_initial_name(self.wav), "")
 
 
+class BackfillTests(unittest.TestCase):
+    def test_backfill(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            def rec(stem, meta, summary=None):
+                (tmp / f"{stem}.wav").write_bytes(b"x")
+                (tmp / f"{stem}.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+                if summary:
+                    (tmp / f"{stem}.summary.json").write_text(json.dumps(summary, ensure_ascii=False),
+                                                              encoding="utf-8")
+            rec("20261001_100000", {"window": "Zoom Meeting"}, {"title": "Релиз в ноябре"})
+            rec("20261002_100000", {"window": "Планёрка | Microsoft Teams", "meeting": "Microsoft Teams"})
+            rec("20261003_100000", {"title": "Моё", "title_by_user": True})
+            rec("20261004_100000", {"title": "Старое без флага"})
+            self.assertEqual(titles.backfill(tmp), 2)
+            get = lambda s: json.loads((tmp / f"{s}.json").read_text(encoding="utf-8"))["title"]
+            self.assertEqual(get("20261001_100000"), "Релиз в ноябре · 01.10.2026")
+            self.assertEqual(get("20261002_100000"), "Планёрка · 02.10.2026")
+            self.assertEqual(get("20261003_100000"), "Моё")
+            self.assertEqual(get("20261004_100000"), "Старое без флага")
+            self.assertEqual(titles.backfill(tmp), 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -174,6 +174,13 @@ class Scenario6End(unittest.TestCase):
         self.assertEqual(s.run(60, windows=[MEET], mic={"chrome.exe"}), IDLE)
 
 
+    def test_manual_end_then_signals_vanish_never_asks_again(self):
+        s = in_meeting()
+        s.act("manual_end")
+        states = {s.run(5, windows=[], mic=set()) for _ in range(30)}     # окно закрыто, микрофон свободен
+        self.assertEqual(states, {IDLE})
+
+
 class RecordingTrim(unittest.TestCase):
     def test_last_active_time_marks_real_end_of_meeting(self):
         s = in_meeting()
