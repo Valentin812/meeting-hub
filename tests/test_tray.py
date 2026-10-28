@@ -30,6 +30,8 @@ class MuteLabelTests(unittest.TestCase):
     def test_labels(self):
         self.assertIn("Выключить", tray.Tray.mute_label(False))
         self.assertIn("Включить", tray.Tray.mute_label(True))
+        self.assertIn("Не писать", tray.Tray.system_label(False))
+        self.assertIn("Снова писать", tray.Tray.system_label(True))
 
 
 class LeftClickTests(unittest.TestCase):

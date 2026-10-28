@@ -414,8 +414,9 @@ class AudioRecorder:
         self.block = max(1, int(rate * block_sec))
         self.running = False
         self.mic_muted = False          # «выключить мой голос в записи»: пока включено, дорожка микрофона тихая
-        self.muted_sec = 0.0
-        self._muted_since = None
+        self.system_muted = False       # «не писать звук компьютера»: дорожка собеседников и системных звуков тихая
+        self.muted_sec = {"mic": 0.0, "system": 0.0}
+        self._muted_since = {"mic": None, "system": None}
         self.t0 = None
         self.stem = ""
         self.meta = {}
@@ -459,18 +460,25 @@ class AudioRecorder:
             self._capture.append(th)
         return self.stem
 
-    def set_mic_muted(self, value):
-        """Микрофон в записи: True — вместо вашего голоса тишина (участники вас слышат как обычно)."""
+    def _set_muted(self, name, value):
         value = bool(value)
-        if value == self.mic_muted:
+        if value == getattr(self, name + "_muted"):
             return
         now = self.clock()
         if value:
-            self._muted_since = now
-        elif self._muted_since is not None:
-            self.muted_sec += max(0.0, now - self._muted_since)
-            self._muted_since = None
-        self.mic_muted = value
+            self._muted_since[name] = now
+        elif self._muted_since[name] is not None:
+            self.muted_sec[name] += max(0.0, now - self._muted_since[name])
+            self._muted_since[name] = None
+        setattr(self, name + "_muted", value)
+
+    def set_mic_muted(self, value):
+        """Микрофон в записи: True — вместо вашего голоса тишина (участники вас слышат как обычно)."""
+        self._set_muted("mic", value)
+
+    def set_system_muted(self, value):
+        """Звук компьютера в записи: True — тишина вместо собеседников и системных звуков."""
+        self._set_muted("system", value)
 
     def _capture_loop(self, name):
         token = None
@@ -507,7 +515,7 @@ class AudioRecorder:
                 if not self.running:
                     break
                 if block is not None and len(block):
-                    if name == "mic" and self.mic_muted:
+                    if getattr(self, name + "_muted", False):
                         block = np.zeros_like(block)
                     self._queue.put((name, t, block))
         except Exception as e:
@@ -597,9 +605,11 @@ class AudioRecorder:
             "errors": errors,
             "status": "saved",
         })
-        muted = self.muted_sec + (max(0.0, t_stop - self._muted_since) if self._muted_since else 0.0)
-        if muted > 0:
-            self.meta["mic_muted_sec"] = round(muted, 1)
+        for name in ("mic", "system"):
+            since = self._muted_since[name]
+            muted = self.muted_sec[name] + (max(0.0, t_stop - since) if since else 0.0)
+            if muted > 0:
+                self.meta[name + "_muted_sec"] = round(muted, 1)
         self._write_meta()
         return {"path": out, "duration": target / self.rate, "errors": errors,
                 "trimmed": max(0.0, t_stop - end)}
