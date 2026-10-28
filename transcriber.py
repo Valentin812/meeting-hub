@@ -10,7 +10,7 @@
 * Результат рядом с записью: <запись>.txt (читаемый текст) и <запись>.transcript.json (сегменты).
 
 Движок подключается через интерфейс Engine.transcribe(samples, language, should_stop) —
-так же можно будет подключить облачный (SaluteSpeech, Groq).
+так подключаются и другие движки (GigaAM).
 """
 import json
 import os
