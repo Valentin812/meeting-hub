@@ -5,9 +5,11 @@
 // Секреты (Edge Functions → Secrets):
 //   GIGACHAT_AUTH_KEY — ключ авторизации из кабинета Сбера (в base64, как выдан)
 //   GIGACHAT_SCOPE    — необязательно, по умолчанию GIGACHAT_API_PERS
+//   SALUTE_AUTH_KEY   — ключ SaluteSpeech: сервер выдаёт программе только временный пропуск (около 30 минут),
+//                       сам ключ и звук через сервер не проходят
+//   SALUTE_SCOPE      — необязательно, по умолчанию SALUTE_SPEECH_PERS
 //   SBER_CA_PEM       — корневой сертификат Минцифры (текст .crt целиком), нужен для TLS к серверам Сбера
 //   TEAM_TOKENS       — коды доступа через запятую: «имя:код,имя2:код2»
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const OAUTH = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const CHAT = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions";
@@ -35,24 +37,30 @@ function tlsClient() {
 // deno-lint-ignore no-explicit-any
 const sber = (url: string, init: any) => fetch(url, { ...init, client: tlsClient() });
 
-let token = "", tokenUntil = 0;
-async function accessToken(): Promise<string> {
-  if (token && Date.now() < tokenUntil - 60_000) return token;
-  const key = (Deno.env.get("GIGACHAT_AUTH_KEY") ?? "").replace(/^Basic\s+/i, "").trim();
-  if (!key) throw new Error("GIGACHAT_AUTH_KEY не задан");
+const SERVICES: Record<string, { key: string; scope: string; def: string }> = {
+  giga: { key: "GIGACHAT_AUTH_KEY", scope: "GIGACHAT_SCOPE", def: "GIGACHAT_API_PERS" },
+  salute: { key: "SALUTE_AUTH_KEY", scope: "SALUTE_SCOPE", def: "SALUTE_SPEECH_PERS" },
+};
+const cache: Record<string, { token: string; until: number }> = {};
+async function accessToken(service = "giga"): Promise<{ token: string; until: number }> {
+  const cfg = SERVICES[service];
+  if (!cfg) throw new Error("неизвестный сервис");
+  const hit = cache[service];
+  if (hit && Date.now() < hit.until - 120_000) return hit;
+  const key = (Deno.env.get(cfg.key) ?? "").replace(/^Basic\s+/i, "").trim();
+  if (!key) throw new Error(`${cfg.key} не задан`);
   const r = await sber(OAUTH, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
       "RqUID": crypto.randomUUID(), "Authorization": "Basic " + key,
     },
-    body: new URLSearchParams({ scope: Deno.env.get("GIGACHAT_SCOPE") || "GIGACHAT_API_PERS" }),
+    body: new URLSearchParams({ scope: Deno.env.get(cfg.scope) || cfg.def }),
   });
   if (!r.ok) throw new Error(`Сбер не выдал токен: ${r.status} ${(await r.text()).slice(0, 200)}`);
   const d = await r.json();
-  token = d.access_token;
-  tokenUntil = Number(d.expires_at) > 1e11 ? Number(d.expires_at) : Date.now() + 25 * 60_000;
-  return token;
+  const until = Number(d.expires_at) > 1e11 ? Number(d.expires_at) : Date.now() + 25 * 60_000;
+  return (cache[service] = { token: d.access_token, until });
 }
 
 function who(req: Request): string | null {
@@ -93,9 +101,11 @@ Deno.serve(async (req) => {
   if (!name) return json({ error: "неверный код доступа" }, 401);
   if (limited(name)) return json({ error: "слишком много запросов, попробуйте позже" }, 429);
 
-  if (req.method === "GET") {           // проверка из настроек программы
+  if (req.method === "GET") {           // проверка из настроек программы; ?service=salute — временный пропуск
+    const service = new URL(req.url).searchParams.get("service") ?? "giga";
     try {
-      await accessToken();
+      const t = await accessToken(service);
+      if (service === "salute") return json({ ok: true, user: name, access_token: t.token, expires_at: t.until });
       return json({ ok: true, user: name });
     } catch (e) {
       return json({ ok: false, user: name, error: String(e instanceof Error ? e.message : e) }, 502);
@@ -124,12 +134,12 @@ Deno.serve(async (req) => {
         last = await sber(CHAT, {
           method: "POST",
           headers: {
-            "Authorization": "Bearer " + await accessToken(), "Content-Type": "application/json",
+            "Authorization": "Bearer " + (await accessToken("giga")).token, "Content-Type": "application/json",
             "Accept": body.stream ? "text/event-stream" : "application/json",
           },
           body: payload,
         });
-        if (last.status === 401) token = "";
+        if (last.status === 401) delete cache["giga"];
         if (last.status !== 429 && last.status !== 503) break;
         if (attempt < RETRY_MS.length) {
           await last.body?.cancel();

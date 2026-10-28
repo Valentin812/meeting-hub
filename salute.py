@@ -18,6 +18,9 @@ API_URL = "https://smartspeech.sber.ru/rest/v1"
 RATE = 16000
 LANGS = {"ru": "ru-RU", "en": "en-US", "kk": "kk-KZ"}
 COOLDOWN_SEC = 600
+PROXY_URL = "https://swprtuowqpuwgthigweq.supabase.co/functions/v1/giga-proxy"
+CHUNK_SEC = 1800                 # длинные записи отправляем кусками по 30 минут
+MIN_CHUNK_SEC = 300
 
 
 class SaluteError(Exception):
@@ -56,9 +59,69 @@ def parse_result(data):
     return out
 
 
+def split_pcm(pcm, max_sec, rate=RATE, search_sec=60, frame_sec=0.5):
+    """Разбить 16-битный моно PCM на куски не длиннее max_sec. Режем в самом тихом месте последней минуты
+    куска, чтобы не разрезать слово. Возвращает [(от, до)] в отсчётах."""
+    import numpy as np
+    samples = np.frombuffer(pcm, dtype="<i2")
+    n, limit = len(samples), int(max_sec * rate)
+    if n <= limit:
+        return [(0, n)]
+    frame, parts, pos = int(frame_sec * rate), [], 0
+    while n - pos > limit:
+        end = pos + limit
+        lo = max(pos + limit // 2, end - int(search_sec * rate))
+        count = (end - lo) // frame
+        if count < 1:
+            cut = end
+        else:
+            quiet = np.abs(samples[lo:lo + count * frame].astype(np.int32)).reshape(count, frame).mean(axis=1)
+            cut = lo + int(quiet.argmin()) * frame + frame // 2
+        parts.append((pos, cut))
+        pos = cut
+    parts.append((pos, n))
+    return parts
+
+
+def _too_big(error):
+    text = str(error).lower()
+    return "413" in text or "too large" in text or "слишком больш" in text or "exceed" in text
+
+
+class ProxyTokenSource:
+    """Временный пропуск Сбера от сервера команды: ключ Salute в программе не хранится."""
+
+    def __init__(self, code, url=PROXY_URL, timeout=30):
+        self.code, self.url, self.timeout = (code or "").strip(), (url or PROXY_URL).rstrip("/"), timeout
+
+    def fetch(self):
+        if not self.code:
+            raise SaluteError("не указан код доступа")
+        req = urllib.request.Request(self.url + "?service=salute", headers={
+            "x-hub-token": self.code, "User-Agent": "MeetingHub"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:300]
+            try:
+                body = json.loads(body).get("error") or body
+            except (ValueError, AttributeError):
+                pass
+            raise SaluteError(f"сервер команды ответил {e.code}: {body}")
+        except (OSError, ValueError) as e:
+            raise SaluteError(f"нет связи с сервером команды: {getattr(e, 'reason', e)}")
+        if not data.get("ok") or not data.get("access_token"):
+            raise SaluteError(data.get("error") or "сервер команды не выдал пропуск")
+        exp = float(data.get("expires_at") or 0)
+        return data["access_token"], (exp / 1000 if exp > 1e11 else exp or time.time() + 1500)
+
+
 class SaluteClient:
     def __init__(self, auth_key, scope="SALUTE_SPEECH_PERS", verify_tls=True, oauth_url=OAUTH_URL,
-                 api_url=API_URL, timeout=60, poll_sec=2.0, max_wait_sec=3600):
+                 api_url=API_URL, timeout=60, poll_sec=2.0, max_wait_sec=3600, token_source=None,
+                 chunk_sec=CHUNK_SEC):
+        self.token_source, self.chunk_sec = token_source, chunk_sec
         self.auth_key = (auth_key or "").strip()
         if self.auth_key.lower().startswith("basic "):
             self.auth_key = self.auth_key[6:].strip()
@@ -93,6 +156,11 @@ class SaluteClient:
             raise SaluteError(f"нет связи с сервисом: {e}")
 
     def token(self):
+        if self.token_source is not None:
+            if self._token and time.time() < self._expires - 120:
+                return self._token
+            self._token, self._expires = self.token_source.fetch()
+            return self._token
         if not self.auth_key:
             raise SaluteError("не указан ключ авторизации")
         if self._token and time.time() < self._expires - 60:
@@ -129,7 +197,25 @@ class SaluteClient:
 
     # --- распознавание
     def transcribe_pcm(self, pcm, language="ru", should_stop=None):
-        """pcm — 16-битный моно 16 кГц (bytes). Возвращает сегменты [{'start','end','text'}]."""
+        """pcm — 16-битный моно 16 кГц (bytes). Длинную запись режем на куски (по тихим местам); если сервис
+        отвечает «файл слишком большой», куски уменьшаются вдвое. Возвращает сегменты [{'start','end','text'}]."""
+        chunk = self.chunk_sec
+        while True:
+            parts = split_pcm(pcm, chunk)
+            out = []
+            try:
+                for a, b in parts:
+                    piece = self._transcribe_one(pcm[a * 2:b * 2], language, should_stop)
+                    shift = a / RATE
+                    out += [dict(s, start=round(s["start"] + shift, 2), end=round(s["end"] + shift, 2))
+                            for s in piece]
+                return out
+            except SaluteError as e:
+                if not _too_big(e) or chunk <= MIN_CHUNK_SEC:
+                    raise
+                chunk = max(MIN_CHUNK_SEC, chunk // 2)
+
+    def _transcribe_one(self, pcm, language="ru", should_stop=None):
         stop = should_stop or (lambda _p=None: None)
         stop()
         up = self._json(self._request(

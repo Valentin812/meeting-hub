@@ -18,6 +18,8 @@ RESULT = [{"results": [{"text": "привет мир", "normalized_text": "Пр�
 class Fake(BaseHTTPRequestHandler):
     mode = "ok"
     calls = []
+    uploads = []
+    max_upload = 10 ** 9
 
     def log_message(self, *a):
         pass
@@ -36,6 +38,9 @@ class Fake(BaseHTTPRequestHandler):
                 return self._send(401, {"message": "bad"})
             return self._send(200, {"access_token": "T", "expires_at": 9999999999999})
         if self.path == "/v1/data:upload":
+            if len(body) > Fake.max_upload:
+                return self._send(413, {"message": "file too large"})
+            Fake.uploads.append(len(body))
             return self._send(200, {"status": 200, "result": {"request_file_id": "F1"}})
         if self.path == "/v1/speech:async_recognize":
             Fake.opts = json.loads(body)
@@ -44,6 +49,10 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_GET(self):
         Fake.calls.append((self.path, self.headers.get("Authorization", "")[:10], 0))
+        if self.path.startswith("/proxy"):
+            if self.headers.get("x-hub-token") != "GOODCODE12345":
+                return self._send(401, {"error": "неверный код доступа"})
+            return self._send(200, {"ok": True, "user": "t", "access_token": "PT", "expires_at": 9999999999999})
         if self.path.startswith("/v1/task:get"):
             if Fake.mode == "taskerr":
                 return self._send(200, {"result": {"status": "ERROR", "error": "boom"}})
@@ -85,7 +94,48 @@ class SaluteTests(unittest.TestCase):
         return salute.SaluteClient(key, oauth_url=base + "/oauth", api_url=base + "/v1", poll_sec=0.01, timeout=3)
 
     def setUp(self):
-        Fake.mode = "ok"; Fake.calls = []
+        Fake.mode = "ok"; Fake.calls = []; Fake.uploads = []; Fake.max_upload = 10 ** 9
+
+    def proxy_client(self, code="GOODCODE12345", **kw):
+        base = f"http://127.0.0.1:{self.port}"
+        src = salute.ProxyTokenSource(code, base + "/proxy", timeout=3)
+        return salute.SaluteClient("", api_url=base + "/v1", poll_sec=0.01, timeout=3, token_source=src, **kw)
+
+    def test_proxy_token_flow_and_bad_code(self):
+        seg = self.proxy_client().transcribe_pcm(b"\0\0" * 16000, "ru")
+        self.assertEqual(seg[0]["text"], "Привет, мир.")
+        self.assertFalse(any(c[0] == "/oauth" for c in Fake.calls))      # ключ Сбера программе не нужен
+        self.assertTrue(any(c[1] == "Bearer PT" for c in Fake.calls))
+        with self.assertRaises(salute.SaluteError) as cm:
+            self.proxy_client("WRONGCODE").check()
+        self.assertIn("401", str(cm.exception))
+
+    def test_split_pcm_cuts_in_quiet_place(self):
+        rate = salute.RATE
+        loud = (np.random.RandomState(1).randn(rate * 100) * 3000).astype("<i2")
+        loud[rate * 55:rate * 56] = 0                                    # тишина в последней минуте куска
+        parts = salute.split_pcm(loud.tobytes(), 60)
+        self.assertEqual(parts[0][0], 0); self.assertEqual(parts[-1][1], len(loud))
+        self.assertTrue(all(b - a <= 60 * rate for a, b in parts))
+        self.assertTrue(all(parts[i][1] == parts[i + 1][0] for i in range(len(parts) - 1)))
+        self.assertTrue(rate * 55 <= parts[0][1] <= rate * 56)
+        self.assertEqual(salute.split_pcm(b"\0\0" * 100, 60), [(0, 100)])
+
+    def test_long_audio_is_chunked_with_offsets(self):
+        pcm = b"\0\0" * (16000 * 25)
+        seg = self.proxy_client(chunk_sec=10).transcribe_pcm(pcm, "ru")
+        self.assertGreaterEqual(len(Fake.uploads), 3)
+        starts = [s["start"] for s in seg if s["text"] == "Привет, мир."]
+        self.assertEqual(len(starts), len(Fake.uploads))
+        self.assertAlmostEqual(starts[0], 0.5)
+        self.assertEqual(starts, sorted(starts)); self.assertGreater(starts[-1], 10.0)
+        self.assertEqual(seg, sorted(seg, key=lambda s: s["start"]))
+
+    def test_too_big_chunk_is_halved(self):
+        Fake.max_upload = 16000 * 2 * 400                                # сервер принимает до 400 с
+        seg = self.proxy_client(chunk_sec=1000).transcribe_pcm(b"\0\0" * (16000 * 900), "ru")
+        self.assertTrue(Fake.uploads and max(Fake.uploads) <= Fake.max_upload)
+        self.assertGreaterEqual(len([s for s in seg if s["text"] == "Привет, мир."]), 3)
 
     def test_parse_result(self):
         seg = salute.parse_result(RESULT)
