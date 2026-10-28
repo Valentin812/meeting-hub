@@ -194,7 +194,8 @@ def auto_name(wav, result):
         meta = {}
     fields = {}
     if title and not meta.get("title_by_user"):
-        fields["title"], fields["title_auto"] = title, True
+        import titles
+        fields["title"], fields["title_auto"], fields["title_source"] = titles.with_date(title, Path(wav).stem), True, "ai"
     if desc and not meta.get("description_by_user"):
         fields["description"], fields["description_auto"] = desc, True
     if not fields:
