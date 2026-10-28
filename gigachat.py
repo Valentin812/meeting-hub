@@ -14,6 +14,7 @@ import urllib.request
 
 import analyzer
 import chat
+import privacy
 
 PROXY_URL = "https://swprtuowqpuwgthigweq.supabase.co/functions/v1/giga-proxy"
 MODELS = ("GigaChat-2-Pro", "GigaChat-2", "GigaChat-2-Max")
@@ -131,15 +132,24 @@ class ProxyClient:
 class LlmRouter:
     """Куда отправлять запросы: сначала GigaChat (если включён), при ошибке — локальная Ollama."""
 
-    def __init__(self, local_model, client=None, giga_model=DEFAULT_MODEL, notify=None, clock=time.time):
+    def __init__(self, local_model, client=None, giga_model=DEFAULT_MODEL, notify=None, clock=time.time,
+                 mask=True, log=None):
         self.local_model, self.client, self.giga_model = local_model, client, giga_model
         self.notify, self.clock = notify, clock
+        self.mask, self.log = mask, log          # log(meeting, what, chars, masked, ok, error) — журнал отправок
         self.name = "ollama"
         self.fallback_reason = ""
         self._skip_until = 0.0
 
-    def _cloud_ready(self):
-        return self.client is not None and self.clock() >= self._skip_until
+    def _cloud_ready(self, local_only=False):
+        return not local_only and self.client is not None and self.clock() >= self._skip_until
+
+    def _log(self, meeting, what, chars, masked, ok, error=""):
+        if self.log:
+            try:
+                self.log(meeting, what, chars, masked, ok, error)
+            except Exception:
+                pass
 
     def _failed(self, reason):
         self._skip_until = self.clock() + COOLDOWN_SEC
@@ -147,34 +157,59 @@ class LlmRouter:
         if self.notify:
             self.notify(reason)
 
-    def chat_json(self, system, user, cancel_event=None):
-        """Для итогов: словарь из ответа модели."""
-        if self._cloud_ready():
+    def chat_json(self, system, user, cancel_event=None, meeting=None, local_only=False):
+        """Для итогов: словарь из ответа модели. local_only — закрытая встреча: только локальная модель."""
+        if self._cloud_ready(local_only):
+            masker = privacy.Masker() if self.mask else None
+            sent = masker.mask(user) if masker else user
+            ok, error = True, ""
             try:
                 text = self.client.complete([{"role": "system", "content": system},
-                                             {"role": "user", "content": user}], self.giga_model,
+                                             {"role": "user", "content": sent}], self.giga_model,
                                             cancel_event=cancel_event)
                 self.name = "gigachat"
-                return analyzer.parse_json(text)
+                result = analyzer.parse_json(text)
+                return masker.unmask_obj(result) if masker else result
             except analyzer.Cancelled:
+                ok = False
                 raise
             except (GigaError, ValueError, OSError, KeyError, TypeError) as e:
-                self._failed(str(e))
-        self.name = "ollama (запасной)" if self.client is not None else "ollama"
+                ok, error = False, str(e)
+                self._failed(error)
+            finally:
+                self._log(meeting, "итоги", len(system) + len(sent), masker.count if masker else 0, ok, error)
+        self.name = "ollama (запасной)" if self.client is not None and not local_only else "ollama"
         return analyzer.ollama_chat(self.local_model, system, user, cancel_event)
 
-    def stream(self, messages, on_text, cancel_event=None):
-        """Для чата: ответ по кусочкам."""
-        if self._cloud_ready():
+    def stream(self, messages, on_text, cancel_event=None, meeting=None, local_only=False):
+        """Для чата: ответ по кусочкам. local_only — закрытая встреча: только локальная модель."""
+        if self._cloud_ready(local_only):
             got = []
+            masker = privacy.Masker() if self.mask else None
+            sent = masker.mask_messages(messages) if masker else messages
+            un = privacy.StreamUnmasker(masker) if masker else None
+
+            def piece(t):
+                shown = un.feed(t) if un else t
+                if shown:
+                    got.append(shown)
+                    on_text(shown)
+            ok, error = True, ""
             try:
-                text = self.client.stream(messages, self.giga_model, lambda t: (got.append(t), on_text(t)),
-                                          cancel_event)
+                self.client.stream(sent, self.giga_model, piece, cancel_event)
+                tail = un.flush() if un else ""
+                if tail:
+                    got.append(tail)
+                    on_text(tail)
                 self.name = "gigachat"
-                return text
+                return "".join(got)
             except (GigaError, OSError) as e:
-                self._failed(str(e))
+                ok, error = False, str(e)
+                self._failed(error)
                 if got:                                   # часть ответа уже показана — не дублируем
                     return "".join(got)
-        self.name = "ollama (запасной)" if self.client is not None else "ollama"
+            finally:
+                self._log(meeting, "чат", sum(len(m.get("content", "")) for m in sent),
+                          masker.count if masker else 0, ok, error)
+        self.name = "ollama (запасной)" if self.client is not None and not local_only else "ollama"
         return chat.stream_answer(self.local_model, messages, on_text, cancel_event)

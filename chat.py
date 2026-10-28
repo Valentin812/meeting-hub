@@ -111,11 +111,13 @@ def summary_text(result):
     return "\n".join(parts)
 
 
-def all_meetings_context(folder, question, limit=MAX_CONTEXT_CHARS):
+def all_meetings_context(folder, question, limit=MAX_CONTEXT_CHARS, skip=()):
     """Итоги всех встреч из папки; самые подходящие вопросу — первыми, пока хватает места."""
     from pathlib import Path
     blocks = []
     for p in sorted(Path(folder).glob("*.summary.json")):
+        if p.name[:-len(".summary.json")] in skip:           # закрытые встречи в облако не отдаём
+            continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):

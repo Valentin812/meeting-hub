@@ -88,15 +88,17 @@ def _held_at(wav, meta):
     return None
 
 
-def build_payload(wav):
+def build_payload(wav, with_transcript=True):
     """Данные встречи для Канбана: из .json, .summary.json и текста расшифровки рядом с записью."""
     wav = Path(wav)
     meta = _read(wav.with_suffix(".json"))
     summary = _read(wav.with_name(wav.stem + ".summary.json"))
-    try:
-        transcript = wav.with_suffix(".txt").read_text(encoding="utf-8")
-    except OSError:
-        transcript = ""
+    transcript = ""
+    if with_transcript:
+        try:
+            transcript = wav.with_suffix(".txt").read_text(encoding="utf-8")
+        except OSError:
+            pass
     title = (meta.get("title") or summary.get("title") or meta.get("window") or meta.get("meeting")
              or wav.stem).strip()
     return {
@@ -109,11 +111,13 @@ def build_payload(wav):
     }
 
 
-def push(token, wav, base_url=BASE_URL, key=PUBLIC_KEY, opener=urllib.request.urlopen):
-    """Отправить встречу. Возвращает id встречи в Канбане. Встреча без итогов и расшифровки не отправляется."""
-    payload = build_payload(wav)
+def push(token, wav, base_url=BASE_URL, key=PUBLIC_KEY, opener=urllib.request.urlopen, with_transcript=True):
+    """Отправить встречу. Возвращает id встречи в Канбане. Без итогов (и без расшифровки, если её разрешено слать)
+    встреча не отправляется. with_transcript=False — полный текст разговора остаётся на компьютере."""
+    payload = build_payload(wav, with_transcript)
     if not payload["transcript"].strip() and not payload["summary"]:
-        raise KanbanError("у встречи ещё нет расшифровки")
+        raise KanbanError("у встречи ещё нет итогов" + ("" if with_transcript else
+                                                         " (расшифровку вы отправлять не разрешили)"))
     data = _request(base_url + FUNCTION, {"action": "push", "meeting": payload},
                     {"apikey": key, "x-meeting-token": token}, 60, opener)
     if not data.get("ok"):

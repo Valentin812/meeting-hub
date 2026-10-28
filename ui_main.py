@@ -18,6 +18,7 @@ import daily
 import gigachat
 import recorder as rec_mod
 import importer
+import privacy
 import report as report_mod
 import theme
 import transcriber as tr_mod
@@ -334,6 +335,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         items = [i for i in rec_mod.list_recordings(self.rec_folder)
                  if hits is None or i["path"].stem in hits]
         rows = []
+        words = self.privacy_words()
         for it in items:
             stem = it["path"].stem
             state, key = self.meeting_state(it)
@@ -341,7 +343,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             info = " · ".join(x for x in (clock(stem), dur_text(it.get("duration_sec"))) if x)
             if hits is not None and hits.get(stem, {}).get("snippet"):
                 info = hits[stem]["snippet"]                 # где именно нашлось
-            rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": meeting_title(it),
+            lock = "🔒 " if privacy.is_confidential(it, words) else ""
+            rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": lock + meeting_title(it),
                          "info": info, "chip": chip, "key": key})
         lst = self.records_tree
         lst.set_rows(rows)
@@ -403,7 +406,12 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             parts.append(meta["meeting"])
         if meta.get("audio_deleted") or not wav.exists():
             parts.append("аудио удалено")
-        self.d_meta.config(text=" · ".join(parts))
+        if self.is_confidential(wav):
+            parts.append("🔒 Конфиденциально: только локальная обработка")
+        sent = self.cloud_log.services_for(stem)
+        if sent:
+            parts.append("☁ обработано в облаке: " + ", ".join(sent))
+        self.d_meta.config(text=" · ".join(p for p in parts if p))
         desc = (meta.get("description") or "").strip()
         self.d_desc.config(text=desc)
         if desc:
@@ -506,6 +514,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             m.add_command(label="Открыть расшифровку (TXT)", command=lambda: self.open_path(tr_mod.output_paths(wav)[0]))
         if self.summary_path(wav).exists():
             m.add_command(label="Сохранить задачи в CSV…", command=lambda: self.export_tasks(wav))
+        m.add_separator()
+        m.add_command(label=("Снять пометку «Конфиденциально»" if self.is_confidential(wav)
+                             else "Пометить «Конфиденциально»"), command=lambda: self.toggle_confidential(wav))
+        m.add_separator()
         if has_text and self.settings.get("kanban_token"):
             m.add_command(label="Отправить в Канбан", command=lambda: self.kanban_push(wav, manual=True))
         if wav.exists():
@@ -1215,6 +1227,22 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                                                               k_state.set(self.kanban_status_text()))).pack(
             side="left", padx=(8, 0))
 
+        ttk.Separator(p).pack(fill="x", pady=(14, 8))
+        ttk.Label(p, text="Конфиденциальность", style="H2.TLabel").pack(anchor="w")
+        hint(p, "Встречи с пометкой «Конфиденциально» обрабатываются только локально: GigaChat и Канбан их не получают.")
+        p_mask = tk.BooleanVar(value=bool(s.get("privacy_mask", True)))
+        ttk.Checkbutton(p, text="Скрывать личные данные перед отправкой в GigaChat (ФИО, телефоны, почта, счета, суммы)",
+                        variable=p_mask).pack(anchor="w", padx=(28, 0), pady=(4, 0))
+        k_text = tk.BooleanVar(value=bool(s.get("kanban_transcript", False)))
+        ttk.Checkbutton(p, text="Отправлять в Канбан и полную расшифровку (по умолчанию только итоги и задачи)",
+                        variable=k_text).pack(anchor="w", padx=(28, 0), pady=(4, 0))
+        ttk.Label(p, text="Слова, по которым встреча считается конфиденциальной (через запятую):").pack(
+            anchor="w", padx=(28, 0), pady=(8, 0))
+        p_words = tk.StringVar(value=s.get("privacy_words", ""))
+        ttk.Entry(p, textvariable=p_words, width=60).pack(anchor="w", padx=(28, 0))
+        ttk.Button(p, text="Журнал отправок в облако…", command=self.open_cloud_log).pack(
+            anchor="w", padx=(28, 0), pady=(8, 0))
+
         # 4. Хранение
         p = page("Хранение")
         keep_now = int(s.get("keep_audio_days", 0))
@@ -1285,7 +1313,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
                      giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip(),
-                     kanban_auto=bool(k_auto.get()))
+                     kanban_auto=bool(k_auto.get()), privacy_mask=bool(p_mask.get()),
+                     kanban_transcript=bool(k_text.get()), privacy_words=p_words.get().strip())
             for old_key in ("salute_enabled", "salute_key", "salute_scope", "salute_insecure"):
                 s.pop(old_key, None)                      # SaluteSpeech из программы убран
             theme_changed = new_theme != s.get("theme", "system")
@@ -1325,6 +1354,30 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.refresh_records()
         self.show_meeting(self.selected, force=True)
         self.refresh_status()
+
+    # ------------------------------------------------------------------
+    # Журнал отправок в облако
+    # ------------------------------------------------------------------
+    def open_cloud_log(self):
+        win = tk.Toplevel(self.root)
+        win.title("Журнал отправок в облако")
+        win.geometry("900x420")
+        frame = ttk.Frame(win, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, style="Muted.TLabel", wraplength=860, justify="left", text=(
+            "Что и когда уходило за пределы компьютера. Тексты встреч здесь не хранятся — только сведения об отправке.")
+                  ).pack(anchor="w", pady=(0, 8))
+        cols = ("time", "service", "meeting", "what", "masked", "result")
+        tree = ttk.Treeview(frame, columns=cols, show="headings")
+        for c, t, w in (("time", "Когда", 130), ("service", "Куда", 80), ("meeting", "Встреча", 230),
+                        ("what", "Что", 150), ("masked", "Скрыто данных", 100), ("result", "Итог", 160)):
+            tree.heading(c, text=t)
+            tree.column(c, width=w, anchor="w")
+        tree.pack(fill="both", expand=True)
+        for e in reversed(self.cloud_log.read(300)):
+            tree.insert("", "end", values=(
+                e.get("time", "").replace("T", " "), e.get("service", ""), e.get("meeting", ""), e.get("what", ""),
+                e.get("masked", 0), "отправлено" if e.get("ok") else "ошибка: " + e.get("error", "")))
 
     # ------------------------------------------------------------------
     # Журнал обнаружения (для опытных)
