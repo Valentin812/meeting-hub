@@ -40,6 +40,7 @@ import report as report_mod
 import daily
 import ai_setup
 import updater
+import privacy
 import tray as tray_mod
 import theme
 from ui_main import MainWindow
@@ -48,7 +49,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.23.0"
+APP_VERSION = "7.24.0"
 
 import support
 from support import app_dir, data_dir
@@ -316,6 +317,7 @@ class App(MainWindow):
         self.root = root
         here = data_dir()
         self.data_dir = here
+        self.cloud_log = privacy.CloudLog(here / "cloud_log.jsonl")
         self.log = setup_logging(here)
         imported = []
         if app_dir() != here and support.has_user_data(app_dir()) and \
@@ -519,14 +521,32 @@ class App(MainWindow):
         s = self.settings
         local = (model or s.get("ollama_model") or DEFAULT_MODEL).strip()
         code = (s.get("giga_code") or "").strip()
-        sig = (code, s.get("giga_proxy_url"), s.get("giga_model"), local, bool(s.get("giga_enabled")))
+        mask = bool(s.get("privacy_mask", True))
+        sig = (code, s.get("giga_proxy_url"), s.get("giga_model"), local, bool(s.get("giga_enabled")), mask)
         if getattr(self, "_router_sig", None) != sig or getattr(self, "_router", None) is None:
             client = gigachat.ProxyClient(code, s.get("giga_proxy_url") or gigachat.PROXY_URL) \
                 if s.get("giga_enabled") and code else None
             self._router = gigachat.LlmRouter(local, client, s.get("giga_model") or gigachat.DEFAULT_MODEL,
-                                              notify=self._giga_fallback)
+                                              notify=self._giga_fallback, mask=mask, log=self._giga_logged)
             self._router_sig = sig
         return self._router
+
+    def _giga_logged(self, meeting, what, chars, masked, ok, error=""):
+        self.cloud_log.add("GigaChat", meeting, what, chars, masked, ok, error)
+
+    def privacy_words(self):
+        return privacy.parse_words(self.settings.get("privacy_words", ""))
+
+    def is_confidential(self, wav):
+        return privacy.wav_confidential(wav, self.privacy_words())
+
+    def toggle_confidential(self, wav):
+        now = not self.is_confidential(wav)
+        privacy.set_confidential(wav, now)
+        self._journal_note("Встреча помечена как конфиденциальная" if now else "Пометка «Конфиденциально» снята",
+                           Path(wav).stem, "user")
+        self.refresh_records()
+        self.show_meeting(wav, force=True)
 
     def _giga_fallback(self, reason):
         self._ui_calls.put((lambda: self._journal_note(
@@ -600,13 +620,22 @@ class App(MainWindow):
         token = self.settings.get("kanban_token")
         if not token:
             return
+        if self.is_confidential(wav):
+            if manual:
+                messagebox.showinfo("Канбан", "Встреча помечена как конфиденциальная и в Канбан не отправляется. "
+                                    "Снимите пометку в меню «Ещё», если это нужно.", parent=self.root)
+            return
         import kanban_sync
+        with_text = bool(self.settings.get("kanban_transcript", False))
 
         def work():
             try:
-                kanban_sync.push(token, wav)
+                kanban_sync.push(token, wav, with_transcript=with_text)
+                self.cloud_log.add("Канбан", Path(wav).stem,
+                                   "итоги, задачи и расшифровка" if with_text else "итоги и задачи")
                 note = ("Встреча отправлена в Канбан", Path(wav).stem)
             except kanban_sync.KanbanError as e:
+                self.cloud_log.add("Канбан", Path(wav).stem, "итоги и задачи", ok=False, error=str(e))
                 note = ("Канбан: встреча не отправлена", str(e))
             except Exception as e:
                 self.log.exception("Отправка в Канбан")
@@ -1671,8 +1700,10 @@ class App(MainWindow):
         def worker():
             try:
                 router = self.llm_router(model)
+                closed = bool(src) and self.is_confidential(src)
+                stem = Path(src).stem if src else None
                 result = analyze_transcript(transcript, lambda system, user: router.chat_json(
-                    system, user, self.analysis_cancel), self.analysis_cancel)
+                    system, user, self.analysis_cancel, meeting=stem, local_only=closed), self.analysis_cancel)
                 if self.analysis_cancel.is_set():
                     raise InterruptedError("Обнаружена встреча.")
                 self._ui_calls.put((self.show_result, (result,)))

@@ -6,6 +6,7 @@ from pathlib import Path
 from tkinter import ttk
 
 import chat
+import privacy
 import theme
 import transcriber as tr_mod
 
@@ -89,7 +90,9 @@ class ChatUI:
     # ---- вопрос
     def _chat_context(self, wav, question):
         if self.chat_all.get() or wav is None:
-            return chat.all_meetings_context(Path(wav).parent if wav else self.rec_folder, question)
+            folder = Path(wav).parent if wav else self.rec_folder
+            skip = privacy.confidential_stems(folder, self.privacy_words()) if self.cloud_chat_on() else ()
+            return chat.all_meetings_context(folder, question, skip=skip)
         wav = Path(wav)
         meta, result, text = {}, {}, ""
         try:
@@ -106,6 +109,9 @@ class ChatUI:
             pass
         return chat.build_context(meta.get("title") or result.get("title"), meta.get("description"),
                                   chat.summary_text(result), text, question)
+
+    def cloud_chat_on(self):
+        return bool(self.settings.get("giga_enabled") and (self.settings.get("giga_code") or "").strip())
 
     def chat_send(self):
         question = self.chat_var.get().strip()
@@ -133,8 +139,10 @@ class ChatUI:
         def work():
             answer, error = "", ""
             try:
-                answer = self.llm_router(model).stream(messages, lambda t: put((self._chat_piece, (key, t))),
-                                                       self.chat_cancel)
+                answer = self.llm_router(model).stream(
+                    messages, lambda t: put((self._chat_piece, (key, t))), self.chat_cancel,
+                    meeting=(Path(wav).stem if wav and not self.chat_all.get() else "все встречи"),
+                    local_only=bool(wav) and not self.chat_all.get() and self.is_confidential(wav))
             except Exception as e:
                 error = str(e)
             put((self._chat_done, (key, answer, error)))
