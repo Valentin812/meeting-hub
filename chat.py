@@ -5,6 +5,7 @@ import urllib.request
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MAX_CONTEXT_CHARS = 9000          # ~3 тыс. токенов: помещается в окно qwen2.5:3b вместе с историей
+CLOUD_CONTEXT_CHARS = 40000       # GigaChat держит большое окно: даём больше материалов встречи
 MAX_HISTORY = 8                   # последних реплик диалога
 
 SYSTEM = ("Ты помощник по записи рабочей встречи. Отвечай по-русски, коротко и по делу, обычным текстом. "
