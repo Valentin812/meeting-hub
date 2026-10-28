@@ -1137,25 +1137,13 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             "Без неё в протоколе будет только расшифровка.")).pack(anchor="w")
 
         ttk.Separator(p).pack(fill="x", pady=(14, 8))
-        ttk.Label(p, text="Облако Сбера (необязательно)", style="H2.TLabel").pack(anchor="w")
+        ttk.Label(p, text="GigaChat (необязательно)", style="H2.TLabel").pack(anchor="w")
         g_code = tk.StringVar(value=s.get("giga_code", ""))
-        hint(p, "Один код доступа для SaluteSpeech и GigaChat. Его выдаёт администратор; ключи Сбера в программе "
+        hint(p, "Код доступа к GigaChat. Его выдаёт администратор; ключи Сбера в программе "
                 "не нужны и нигде не хранятся.")
         grow = ttk.Frame(p); grow.pack(fill="x")
         ttk.Label(grow, text="Код доступа").pack(side="left")
         ttk.Entry(grow, textvariable=g_code, show="•", width=34).pack(side="left", padx=8)
-
-        s_on = tk.BooleanVar(value=bool(s.get("salute_enabled")))
-        s_insecure = tk.BooleanVar(value=bool(s.get("salute_insecure", False)))
-        ttk.Checkbutton(p, text="Распознавать речь в облаке SaluteSpeech", variable=s_on).pack(anchor="w", pady=(10, 0))
-        hint(p, "Если облако не отвечает или лимит кончился, программа сама расшифрует локальной моделью. "
-                "Звук уходит на серверы Сбера (длинные записи — кусками) — включайте, только если это допустимо "
-                "для ваших встреч.")
-        srow = ttk.Frame(p); srow.pack(fill="x", padx=(28, 0))
-        ttk.Button(srow, text="Проверить SaluteSpeech", command=lambda: self.check_salute(
-            g_code.get().strip(), s_insecure.get(), win)).pack(side="left")
-        ttk.Checkbutton(p, text="Не проверять сертификат Сбера (если проверка пишет про сертификат)",
-                        variable=s_insecure).pack(anchor="w", padx=(28, 0), pady=(6, 0))
 
         g_on = tk.BooleanVar(value=bool(s.get("giga_enabled")))
         ttk.Checkbutton(p, text="Итоги, задачи и чат через GigaChat", variable=g_on).pack(anchor="w", pady=(10, 0))
@@ -1223,11 +1211,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                 self.toggle_auto_detect()
             self.auto_pause.set(bool(pause.get()))
             old = (s.get("whisper_model", tr_mod.DEFAULT_MODEL), s.get("language", "ru"), s.get("asr_engine", "gigaam"),
-                   bool(s.get("salute_enabled")), s.get("giga_code", ""), bool(s.get("salute_insecure")))
-            if s_on.get() and not s.get("salute_enabled") and not messagebox.askokcancel(
-                    "SaluteSpeech", "Записи встреч будут отправляться в облако Сбера для распознавания.\n\n"
-                    "Включить?", icon="warning", parent=win):
-                s_on.set(False)
+                   s.get("giga_code", ""))
             if g_on.get() and not s.get("giga_enabled") and not messagebox.askokcancel(
                     "GigaChat", "Тексты встреч (расшифровка и вопросы в чате) будут отправляться на сервер команды и дальше в облако Сбера.\n\n"
                     "Включить?", icon="warning", parent=win):
@@ -1238,9 +1222,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      language=lang.get(), ollama_model=llm.get().strip() or self.default_llm,
                      record_meetings=self.record_meetings.get(), auto_transcribe=self.auto_transcribe.get(),
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
-                     auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()), salute_enabled=bool(s_on.get()),
-                     salute_insecure=bool(s_insecure.get()),
+                     auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
                      giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip())
+            for old_key in ("salute_enabled", "salute_key", "salute_scope", "salute_insecure"):
+                s.pop(old_key, None)                      # SaluteSpeech из программы убран
             theme_changed = new_theme != s.get("theme", "system")
             s["theme"] = new_theme
             if theme_changed:
@@ -1250,8 +1235,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             tq = getattr(self, "tq", None)
             if tq is not None:
                 tq.language = None if lang.get() == "auto" else lang.get()
-                if old != (model.get(), lang.get(), engines[engine.get()], bool(s_on.get()), g_code.get().strip(),
-                           bool(s_insecure.get())) and not tq.busy():
+                if old != (model.get(), lang.get(), engines[engine.get()], g_code.get().strip()) and not tq.busy():
                     tq.engine = None
             self.last_event_text = "Настройки сохранены."
             self.refresh_status()

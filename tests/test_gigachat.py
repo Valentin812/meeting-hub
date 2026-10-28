@@ -8,7 +8,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gigachat  # noqa: E402
-SaluteError = gigachat.GigaError
 
 
 class Giga(BaseHTTPRequestHandler):
@@ -83,15 +82,15 @@ class ClientTests(unittest.TestCase):
     def test_check_and_wrong_code(self):
         self.assertIn("код принят", self.client.check())
         bad = gigachat.ProxyClient("WRONG", url=self.client.url)
-        with self.assertRaises(SaluteError) as cm:
+        with self.assertRaises(gigachat.GigaError) as cm:
             bad.check()
         self.assertIn("401", str(cm.exception))
-        with self.assertRaises(SaluteError):
+        with self.assertRaises(gigachat.GigaError):
             gigachat.ProxyClient("").check()
 
     def test_http_error(self):
         Giga.mode = "fail"
-        with self.assertRaises(SaluteError):
+        with self.assertRaises(gigachat.GigaError):
             self.client.complete([{"role": "user", "content": "hi"}])
 
 
@@ -112,13 +111,13 @@ class QueueTests(unittest.TestCase):
 
     def test_gives_up_after_retries(self):
         Giga.mode = "busy"
-        with self.assertRaises(SaluteError):
+        with self.assertRaises(gigachat.GigaError):
             self.client.complete([{"role": "user", "content": "hi"}])
         self.assertEqual(len(Giga.seen), 4)                     # 1 + 3 повтора
 
     def test_other_errors_not_retried(self):
         Giga.mode = "fail"
-        with self.assertRaises(SaluteError):
+        with self.assertRaises(gigachat.GigaError):
             self.client.complete([{"role": "user", "content": "hi"}])
         self.assertEqual(len(Giga.seen), 1)
 

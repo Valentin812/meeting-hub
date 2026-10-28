@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.16.0"
+APP_VERSION = "7.17.0"
 
 import support
 from support import app_dir, data_dir
@@ -505,10 +505,6 @@ class App(MainWindow):
                 if self.settings.get("asr_engine", "gigaam") == "gigaam":
                     import gigaam
                     local = gigaam.GigaAMWithFallback(gigaam.GigaAM(folder), local, notify=self._gigaam_fallback)
-                client = self._salute_client()
-                if self.settings.get("salute_enabled") and client is not None:
-                    import salute
-                    return salute.SaluteWithFallback(client, local, notify=self._salute_fallback)
                 return local
 
             self.tq = tr_mod.TranscriptionQueue(
@@ -552,41 +548,6 @@ class App(MainWindow):
         """Из потока расшифровки: GigaAM не сработала, дальше — Whisper."""
         self._ui_calls.put((lambda: self._journal_note(
             "GigaAM недоступна", f"{reason}. Расшифровываю моделью Whisper.", "auto"), ()))
-
-    def _salute_fallback(self, reason):
-        """Из потока расшифровки: SaluteSpeech не сработал, дальше — локальная модель."""
-        self._ui_calls.put((lambda: self._journal_note(
-            "SaluteSpeech недоступен", f"{reason}. Расшифровываю локальной моделью.", "auto"), ()))
-
-    def _salute_client(self, code=None, insecure=None, timeout=60):
-        """SaluteSpeech: по коду доступа через сервер команды (ключ Сбера не нужен); старый ключ из настроек —
-        только как запасной путь для тех, кто вводил его раньше."""
-        import salute
-        s = self.settings
-        code = (s.get("giga_code") if code is None else code) or ""
-        insecure = s.get("salute_insecure", False) if insecure is None else insecure
-        if code.strip():
-            return salute.SaluteClient("", verify_tls=not insecure, timeout=timeout, token_source=
-                                       salute.ProxyTokenSource(code, s.get("giga_proxy_url") or salute.PROXY_URL))
-        if (s.get("salute_key") or "").strip():
-            return salute.SaluteClient(s["salute_key"], s.get("salute_scope") or "SALUTE_SPEECH_PERS",
-                                       verify_tls=not insecure, timeout=timeout)
-        return None
-
-    def check_salute(self, code, insecure, parent=None):
-        import salute
-
-        def worker():
-            try:
-                client = self._salute_client(code, insecure, timeout=20)
-                if client is None:
-                    raise salute.SaluteError("не указан код доступа")
-                msg = client.check()
-                show = messagebox.showinfo
-            except Exception as e:
-                msg, show = f"Не получилось: {e}", messagebox.showwarning
-            self._ui_calls.put((lambda: show("SaluteSpeech", msg, parent=parent or self.root), ()))
-        threading.Thread(target=worker, daemon=True).start()
 
     def transcribe_files(self, paths, force=False):
         ok, why = tr_mod.LocalWhisper.available()

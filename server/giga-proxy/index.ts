@@ -5,9 +5,6 @@
 // Секреты (Edge Functions → Secrets):
 //   GIGACHAT_AUTH_KEY — ключ авторизации из кабинета Сбера (в base64, как выдан)
 //   GIGACHAT_SCOPE    — необязательно, по умолчанию GIGACHAT_API_PERS
-//   SALUTE_AUTH_KEY   — ключ SaluteSpeech: сервер выдаёт программе только временный пропуск (около 30 минут),
-//                       сам ключ и звук через сервер не проходят
-//   SALUTE_SCOPE      — необязательно, по умолчанию SALUTE_SPEECH_PERS
 //   SBER_CA_PEM       — корневой сертификат Минцифры (текст .crt целиком), нужен для TLS к серверам Сбера
 //   TEAM_TOKENS       — коды доступа через запятую: «имя:код,имя2:код2»
 
@@ -27,11 +24,20 @@ const json = (obj: unknown, status = 200) =>
 
 // deno-lint-ignore no-explicit-any
 let client: any;
+// Сертификат из секрета могли вставить без переводов строк — собираем PEM заново (допускается несколько сертификатов).
+function certs(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g)) {
+    const body = m[1].replace(/\s+/g, "");
+    out.push("-----BEGIN CERTIFICATE-----\n" + (body.match(/.{1,64}/g) ?? []).join("\n") + "\n-----END CERTIFICATE-----\n");
+  }
+  return out.length ? out : [text];
+}
 function tlsClient() {
   const pem = Deno.env.get("SBER_CA_PEM");
   if (!pem) return undefined;
   // deno-lint-ignore no-explicit-any
-  client ??= (Deno as any).createHttpClient({ caCerts: [pem] });
+  client ??= (Deno as any).createHttpClient({ caCerts: certs(pem) });
   return client;
 }
 // deno-lint-ignore no-explicit-any
@@ -39,7 +45,6 @@ const sber = (url: string, init: any) => fetch(url, { ...init, client: tlsClient
 
 const SERVICES: Record<string, { key: string; scope: string; def: string }> = {
   giga: { key: "GIGACHAT_AUTH_KEY", scope: "GIGACHAT_SCOPE", def: "GIGACHAT_API_PERS" },
-  salute: { key: "SALUTE_AUTH_KEY", scope: "SALUTE_SCOPE", def: "SALUTE_SPEECH_PERS" },
 };
 const cache: Record<string, { token: string; until: number }> = {};
 async function accessToken(service = "giga"): Promise<{ token: string; until: number }> {
@@ -101,11 +106,10 @@ Deno.serve(async (req) => {
   if (!name) return json({ error: "неверный код доступа" }, 401);
   if (limited(name)) return json({ error: "слишком много запросов, попробуйте позже" }, 429);
 
-  if (req.method === "GET") {           // проверка из настроек программы; ?service=salute — временный пропуск
+  if (req.method === "GET") {           // проверка из настроек программы
     const service = new URL(req.url).searchParams.get("service") ?? "giga";
     try {
-      const t = await accessToken(service);
-      if (service === "salute") return json({ ok: true, user: name, access_token: t.token, expires_at: t.until });
+      await accessToken(service);
       return json({ ok: true, user: name });
     } catch (e) {
       return json({ ok: false, user: name, error: String(e instanceof Error ? e.message : e) }, 502);
