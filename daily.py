@@ -170,20 +170,86 @@ def _read(p):
     return text
 
 
-def search(folder, query):
-    """Множество имён записей (stem), где встречаются все слова запроса: название, расшифровка, итоги."""
-    words = [w for w in re.findall(r"\w+", (query or "").casefold()) if w]
-    if not words:
+def _patterns(query):
+    """Слова запроса как начала слов: «релизом» найдёт «релиз», «релиза», «релизе» (отрезаем окончание)."""
+    out = []
+    for w in re.findall(r"\w+", (query or "").casefold()):
+        n = len(w)
+        out.append(w if n <= 4 else w[:max(4, n - 2 if n <= 7 else n - 3)])
+    return out
+
+
+def _texts(folder, stem):
+    """(название, итоги, строки расшифровки) для поиска; всё в нижнем регистре сравнивается отдельно."""
+    meta, summary = {}, {}
+    try:
+        meta = json.loads(_read_raw(folder / f"{stem}.json"))
+    except ValueError:
+        pass
+    try:
+        summary = json.loads(_read_raw(folder / f"{stem}.summary.json"))
+    except ValueError:
+        pass
+    title = " ".join(str(meta.get(k) or "") for k in ("title", "window", "meeting", "description"))
+    parts = [str(x) for x in summary.get("summary") or []]
+    for key, field in (("decisions", "text"), ("tasks", "task"), ("open_questions", "question")):
+        for it in summary.get(key) or []:
+            parts.append(str(it.get(field, "")) if isinstance(it, dict) else str(it))
+    lines = [ln for ln in _read_raw(folder / f"{stem}.txt").splitlines() if ln.strip()]
+    return title, "\n".join(parts), lines
+
+
+def _read_raw(p):
+    try:
+        return Path(p).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _snippet(line, pattern, width=110):
+    line = re.sub(r"^\[\d\d:\d\d:\d\d\]\s*", "", line.strip())
+    pos = line.casefold().find(pattern)
+    if pos < 0 or len(line) <= width:
+        return line[:width]
+    start = max(0, pos - width // 3)
+    return ("…" if start else "") + line[start:start + width].strip() + ("…" if start + width < len(line) else "")
+
+
+def search_hits(folder, query):
+    """Поиск по всем встречам. {имя записи: {"score": число, "snippet": фрагмент}} — встречи, где есть ВСЕ слова
+    запроса (название, описание, итоги, расшифровка; окончания слов не важны). None, если запрос пустой."""
+    pats = _patterns(query)
+    if not pats:
         return None
     folder = Path(folder)
     stems = {p.name.split(".")[0] for p in folder.glob("*") if STEM_RE.match(p.name.split(".")[0])}
-    found = set()
+    found = {}
     for stem in stems:
-        text = " ".join(_read(folder / f"{stem}{suffix}")
-                        for suffix in (".json", ".txt", ".summary.json")).casefold()
-        if all(w in text for w in words):
-            found.add(stem)
+        title, summary, lines = _texts(folder, stem)
+        tl, sl, xl = title.casefold(), summary.casefold(), "\n".join(lines).casefold()
+        if not all(p in tl or p in sl or p in xl for p in pats):
+            continue
+        score = sum(5 * tl.count(p) + 3 * sl.count(p) + min(10, xl.count(p)) for p in pats)
+        best, best_hits = "", 0
+        for line in lines:                              # самая «плотная» реплика как фрагмент
+            low = line.casefold()
+            hits = sum(1 for p in pats if p in low)
+            if hits > best_hits:
+                best, best_hits = _snippet(line, next(p for p in pats if p in low)), hits
+        if not best:
+            for line in summary.splitlines():
+                low = line.casefold()
+                if any(p in low for p in pats):
+                    best = _snippet(line, next(p for p in pats if p in low))
+                    break
+        found[stem] = {"score": score, "snippet": best}
     return found
+
+
+def search(folder, query):
+    """Множество имён записей (stem), где встречаются все слова запроса: название, расшифровка, итоги."""
+    hits = search_hits(folder, query)
+    return None if hits is None else set(hits)
 
 
 def update_offer(version, settings, now, busy):

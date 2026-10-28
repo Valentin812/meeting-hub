@@ -109,6 +109,23 @@ class Search(Base):
         self.assertEqual(daily.search(self.dir, "бюджет декабрь"), set())
         self.assertIsNone(daily.search(self.dir, "  "))
 
+    def test_word_endings_ranking_and_snippet(self):
+        write = lambda name, text: (self.dir / name).write_text(text, encoding="utf-8")
+        write("20261010_100000.json", json.dumps({"title": "Релиз в ноябре"}, ensure_ascii=False))
+        write("20261010_100000.txt", "[00:00:03] Вы: Привет\n[00:00:11] Собеседники: По релизу сборка готова")
+        write("20261011_100000.json", json.dumps({"title": "Планёрка"}, ensure_ascii=False))
+        write("20261011_100000.txt", "[00:00:03] Вы: " + "слово " * 40 + "обсудили релизы и сроки " + "ещё " * 40)
+        hits = daily.search_hits(self.dir, "релизом")
+        self.assertEqual(set(hits), {"20261010_100000", "20261011_100000"})
+        self.assertGreater(hits["20261010_100000"]["score"], hits["20261011_100000"]["score"])   # название весомее
+        self.assertIn("релизу", hits["20261010_100000"]["snippet"])
+        long = hits["20261011_100000"]["snippet"]
+        self.assertTrue("релизы" in long and len(long) <= 112, long)
+        self.assertNotIn("[00:00", hits["20261010_100000"]["snippet"])
+        self.assertEqual(set(daily.search_hits(self.dir, "релиз сроки")), {"20261011_100000"})
+        self.assertEqual(daily.search_hits(self.dir, "ноябре релиз")["20261010_100000"]["snippet"], "Собеседники: По релизу сборка готова")
+        self.assertEqual(daily.search_hits(self.dir, "несуществующее"), {})
+
     def test_escaped_json_is_searchable(self):
         wav = self.rec("20261004_100000", 1)
         wav.with_suffix(".json").write_text(json.dumps({"window": "Совещание"}, ensure_ascii=True), encoding="utf-8")
