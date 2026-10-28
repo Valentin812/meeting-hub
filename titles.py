@@ -112,3 +112,34 @@ def apply_initial_name(wav):
         return ""
     importer.write_meta(wav, {"title": title, "title_auto": True, "title_source": source})
     return title
+
+
+def backfill(folder):
+    """Один раз: названия для старых записей без названия (по итогам, если они есть, иначе по окну/словам).
+    Названия, введённые вручную или заданные раньше, не трогаем. Возвращает число переименованных."""
+    done = 0
+    for wav in sorted(Path(folder).glob("*.wav")):
+        if ".part" in wav.name or ".mic." in wav.name or ".system." in wav.name:
+            continue
+        try:
+            meta = json.loads(wav.with_suffix(".json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+        if meta.get("title_by_user") or (meta.get("title") and not meta.get("title_auto")):
+            continue
+        summary = {}
+        try:
+            summary = json.loads(wav.with_name(wav.stem + ".summary.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        before = meta.get("title")
+        if summary.get("title"):
+            importer.auto_name(wav, summary)
+        else:
+            apply_initial_name(wav)
+        try:
+            after = json.loads(wav.with_suffix(".json").read_text(encoding="utf-8")).get("title")
+        except (OSError, ValueError):
+            after = before
+        done += 1 if after != before else 0
+    return done
