@@ -26,6 +26,12 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray.Tray.rec_label(3725), "● ИДЁТ ЗАПИСЬ ВСТРЕЧИ · 1:02")
 
 
+class MuteLabelTests(unittest.TestCase):
+    def test_labels(self):
+        self.assertIn("Выключить", tray.Tray.mute_label(False))
+        self.assertIn("Включить", tray.Tray.mute_label(True))
+
+
 class LeftClickTests(unittest.TestCase):
     def test_falls_back_safely(self):
         class Fake:

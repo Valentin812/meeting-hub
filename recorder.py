@@ -413,6 +413,9 @@ class AudioRecorder:
         self.rate = rate
         self.block = max(1, int(rate * block_sec))
         self.running = False
+        self.mic_muted = False          # «выключить мой голос в записи»: пока включено, дорожка микрофона тихая
+        self.muted_sec = 0.0
+        self._muted_since = None
         self.t0 = None
         self.stem = ""
         self.meta = {}
@@ -456,6 +459,19 @@ class AudioRecorder:
             self._capture.append(th)
         return self.stem
 
+    def set_mic_muted(self, value):
+        """Микрофон в записи: True — вместо вашего голоса тишина (участники вас слышат как обычно)."""
+        value = bool(value)
+        if value == self.mic_muted:
+            return
+        now = self.clock()
+        if value:
+            self._muted_since = now
+        elif self._muted_since is not None:
+            self.muted_sec += max(0.0, now - self._muted_since)
+            self._muted_since = None
+        self.mic_muted = value
+
     def _capture_loop(self, name):
         token = None
         enter = getattr(self.backend, "thread_enter", None)
@@ -491,6 +507,8 @@ class AudioRecorder:
                 if not self.running:
                     break
                 if block is not None and len(block):
+                    if name == "mic" and self.mic_muted:
+                        block = np.zeros_like(block)
                     self._queue.put((name, t, block))
         except Exception as e:
             track.error = f"{SOURCE_LABELS[name]}: запись прервалась ({describe_error(e)})"
@@ -579,6 +597,9 @@ class AudioRecorder:
             "errors": errors,
             "status": "saved",
         })
+        muted = self.muted_sec + (max(0.0, t_stop - self._muted_since) if self._muted_since else 0.0)
+        if muted > 0:
+            self.meta["mic_muted_sec"] = round(muted, 1)
         self._write_meta()
         return {"path": out, "duration": target / self.rate, "errors": errors,
                 "trimmed": max(0.0, t_stop - end)}
