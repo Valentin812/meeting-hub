@@ -58,9 +58,11 @@ class Tray:
     """Колбэки вызываются из потока значка — приложение само переносит их в поток интерфейса."""
 
     def __init__(self, on_open, on_record, on_quit, is_recording=lambda: False, elapsed=lambda: 0.0,
-                 on_mute=lambda: None, is_muted=lambda: False):
+                 on_mute=lambda: None, is_muted=lambda: False,
+                 on_mute_system=lambda: None, is_system_muted=lambda: False):
         self.on_open, self.on_record, self.on_quit = on_open, on_record, on_quit
         self.on_mute, self.is_muted = on_mute, is_muted
+        self.on_mute_system, self.is_system_muted = on_mute_system, is_system_muted
         self.is_recording = is_recording
         self.elapsed = elapsed
         self.icon = None
@@ -75,6 +77,10 @@ class Tray:
     @staticmethod
     def mute_label(muted):
         return "🎙 Включить мой микрофон в записи" if muted else "🔇 Выключить мой микрофон в записи"
+
+    @staticmethod
+    def system_label(muted):
+        return "🔊 Снова писать звук компьютера" if muted else "🔇 Не писать звук компьютера (и собеседников)"
 
     @staticmethod
     def left_click_opens_menu(icon):
@@ -99,6 +105,8 @@ class Tray:
         menu = pystray.Menu(
             pystray.MenuItem(lambda _i: self.rec_label(self.elapsed()), lambda *_: None, enabled=False, visible=rec),
             pystray.MenuItem(lambda _i: self.mute_label(self.is_muted()), lambda *_: self.on_mute(), visible=rec),
+            pystray.MenuItem(lambda _i: self.system_label(self.is_system_muted()), lambda *_: self.on_mute_system(),
+                             visible=rec),
             pystray.MenuItem("■ Остановить запись", lambda *_: self.on_record(), visible=rec),
             pystray.MenuItem("Открыть Meeting Hub", lambda *_: self.on_open(), default=True),
             pystray.MenuItem("● Начать запись", lambda *_: self.on_record(), visible=lambda _i: not rec()),
@@ -116,14 +124,16 @@ class Tray:
         try:
             rec = bool(self.is_recording())
             muted = bool(rec and self.is_muted())
-            key = (rec, int(self.elapsed() // 60) if rec else None, muted)
+            sys_muted = bool(rec and self.is_system_muted())
+            key = (rec, int(self.elapsed() // 60) if rec else None, muted, sys_muted)
             if key != self._menu_key:               # меню Windows строится заранее — обновляем при смене
                 self._menu_key = key
                 self.icon.update_menu()
             if rec != self._recording:
                 self._recording = rec
                 self.icon.icon = make_image(rec)
-            self.icon.title = (("● ИДЁТ ЗАПИСЬ" + (" (микрофон выключен)" if muted else "") + " · " + title)
+            self.icon.title = (("● ИДЁТ ЗАПИСЬ" + (" (микрофон выключен)" if muted else "")
+                                               + (" (звук компьютера не пишется)" if sys_muted else "") + " · " + title)
                                if rec else title)[:120]
         except Exception:
             pass

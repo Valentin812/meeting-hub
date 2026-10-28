@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.21.0"
+APP_VERSION = "7.22.0"
 
 import support
 from support import app_dir, data_dir
@@ -1025,6 +1025,19 @@ class App(MainWindow):
                                 else "Ваш микрофон в записи включён.")
         self.refresh_status()
 
+    def toggle_system_mute(self):
+        """Не писать звук компьютера (собеседники и системные звуки) / снова писать."""
+        rec = self.recorder
+        if rec is None:
+            return
+        rec.set_system_muted(not rec.system_muted)
+        self._journal_note("Звук компьютера в записи " + ("выключен" if rec.system_muted else "включён"),
+                           "Собеседники и системные звуки не записываются" if rec.system_muted
+                           else "Звук компьютера снова записывается", "user")
+        self.last_event_text = ("Звук компьютера в записи выключен: собеседников не слышно в записи."
+                                if rec.system_muted else "Звук компьютера в записи включён.")
+        self.refresh_status()
+
     def ensure_recording_consent(self):
         if self.settings.get("recording_consent"):
             return True
@@ -1538,6 +1551,8 @@ class App(MainWindow):
                                       on_quit=lambda: put((self.quit_app, ())),
                                       on_mute=lambda: put((self.toggle_mic_mute, ())),
                                       is_muted=lambda: bool(self.recorder and self.recorder.mic_muted),
+                                      on_mute_system=lambda: put((self.toggle_system_mute, ())),
+                                      is_system_muted=lambda: bool(self.recorder and self.recorder.system_muted),
                                       is_recording=lambda: self.recorder is not None,
                                       elapsed=lambda: self.recorder.elapsed() if self.recorder else 0.0).start()
         except Exception:

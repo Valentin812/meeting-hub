@@ -120,6 +120,21 @@ class Realtime(Base):
         meta = json.loads(result["path"].with_suffix(".json").read_text(encoding="utf-8"))
         self.assertGreater(meta["mic_muted_sec"], 0.8)
 
+    def test_system_mute_silences_only_system_track(self):
+        rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.5), "system": ToneSource(-0.25)}),
+                            rate=RATE, block_sec=0.1)
+        rec.start({})
+        rec.set_system_muted(True)
+        time.sleep(1.2)
+        result = rec.stop()
+        data, _ = read_stereo(result["path"])
+        mid = slice(int(0.4 * RATE), int(0.9 * RATE))
+        self.assertEqual(int(np.abs(data[mid, 1].astype(np.int32)).max()), 0)
+        self.assertTrue(np.all(data[mid, 0] > 15000))
+        meta = json.loads(result["path"].with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertGreater(meta["system_muted_sec"], 0.8)
+        self.assertNotIn("mic_muted_sec", meta)
+
     def test_silent_loopback_is_padded_and_stop_is_prompt(self):
         loop = SilentLoopback()
         rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.3), "system": loop}), rate=RATE, block_sec=0.1)
