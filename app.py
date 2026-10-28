@@ -48,7 +48,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.15.0"
+APP_VERSION = "7.16.0"
 
 import support
 from support import app_dir, data_dir
@@ -502,6 +502,9 @@ class App(MainWindow):
 
             def factory():
                 local = tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
+                if self.settings.get("asr_engine", "gigaam") == "gigaam":
+                    import gigaam
+                    local = gigaam.GigaAMWithFallback(gigaam.GigaAM(folder), local, notify=self._gigaam_fallback)
                 client = self._salute_client()
                 if self.settings.get("salute_enabled") and client is not None:
                     import salute
@@ -544,6 +547,11 @@ class App(MainWindow):
                 msg, show = f"Не получилось: {e}", messagebox.showwarning
             self._ui_calls.put((lambda: show("GigaChat", msg, parent=parent or self.root), ()))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _gigaam_fallback(self, reason):
+        """Из потока расшифровки: GigaAM не сработала, дальше — Whisper."""
+        self._ui_calls.put((lambda: self._journal_note(
+            "GigaAM недоступна", f"{reason}. Расшифровываю моделью Whisper.", "auto"), ()))
 
     def _salute_fallback(self, reason):
         """Из потока расшифровки: SaluteSpeech не сработал, дальше — локальная модель."""
