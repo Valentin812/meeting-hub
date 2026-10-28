@@ -153,6 +153,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.records_tree.pack(fill="both", expand=True)
         self.list_hint = ttk.Label(left, text="", style="Side.Small.TLabel", wraplength=330, justify="left")
         self.list_hint.pack(fill="x", pady=(6, 0))
+        ttk.Button(left, text="💬 Чат по всем встречам", command=self.open_all_chat).pack(fill="x", pady=(6, 0))
 
         # Справа — встреча
         right = ttk.Frame(body, padding=(16, 12, 18, 12))
@@ -1076,9 +1077,28 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         nb = ttk.Notebook(win)
         nb.pack(fill="both", expand=True, padx=14, pady=(14, 0))
 
+        canvases = {}
+
+        def wheel(e):
+            cv, f = canvases.get(nb.select(), (None, None))
+            if cv is not None and f.winfo_reqheight() > cv.winfo_height():
+                cv.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        win.bind("<MouseWheel>", wheel)
+
         def page(title):
-            f = ttk.Frame(nb, padding=16)
-            nb.add(f, text=title)
+            outer = ttk.Frame(nb)
+            nb.add(outer, text=title)
+            cv = tk.Canvas(outer, highlightthickness=0, bd=0, background=self.pal["bg"])
+            sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+            cv.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            cv.pack(side="left", fill="both", expand=True)
+            f = ttk.Frame(cv, padding=16)
+            wid = cv.create_window((0, 0), window=f, anchor="nw")
+            f.bind("<Configure>", lambda _e: cv.configure(scrollregion=cv.bbox("all")))
+            cv.bind("<Configure>", lambda e: cv.itemconfigure(wid, width=e.width))
+
+            canvases[str(outer)] = (cv, f)
             return f
 
         def hint(parent, text):
