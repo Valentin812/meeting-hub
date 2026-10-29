@@ -30,7 +30,10 @@ MIN_SEC = 1.0           # короче — отпечаток ненадёжен
 WINDOW_SEC = 4.0        # длинную реплику режем на окна
 MAX_WINDOWS = 6         # на реплику, чтобы часовая встреча считалась быстро
 SAME_VOICE = 0.60       # косинусная близость: один и тот же голос внутри встречи
-KNOWN_VOICE = 0.60      # близость к сохранённому голосу: подписываем именем автоматически
+KNOWN_VOICE = 0.60      # близость к сохранённому голосу, с которой человек только ПРЕДЛАГАЕТСЯ (подпись не ставится)
+AUTO_SURE = 0.75        # с этой близостью и …
+AUTO_MARGIN = 0.10      # … заметным отрывом от второго похожего человека подписываем сами (уверенность ~90%+)
+UNKNOWN = "Собеседник"  # так подписан голос, который программа не узнала уверенно
 MIN_VOICE_SEC = 4.0     # меньше суммарно — голос не заводим, реплики остаются «Собеседники»
 MAX_STORED = 12         # отпечатков на человека
 CLIPS = 3               # отрывков для прослушивания на голос
@@ -168,6 +171,26 @@ class Profiles:
             self.people.setdefault(new, []).extend(self.people.pop(old))
             del self.people[new][:-MAX_STORED]
 
+    def ranked(self, vec):
+        """[(близость, имя)] по убыванию — для оценки уверенности."""
+        out = []
+        for name, embs in self.people.items():
+            if embs:
+                sims = sorted((float(np.dot(vec, e)) for e in embs), reverse=True)
+                out.append((float(np.mean(sims[:3])), name))
+        return sorted(out, reverse=True)
+
+    def judge(self, vec):
+        """(имя_если_уверены, предположение, близость). Уверены — только при высокой близости и отрыве."""
+        ranked = self.ranked(vec)
+        if not ranked:
+            return "", "", -1.0
+        best, name = ranked[0]
+        second = ranked[1][0] if len(ranked) > 1 else -1.0
+        if best >= AUTO_SURE and best - second >= AUTO_MARGIN:
+            return name, "", best
+        return "", (name if best >= KNOWN_VOICE else ""), best
+
     def best_match(self, vec, threshold=KNOWN_VOICE):
         """(имя, близость) самого похожего человека или ("", лучшая близость)."""
         best_name, best = "", -1.0
@@ -278,7 +301,8 @@ def read_speakers(wav):
 
 
 def label_of(cluster):
-    return (cluster.get("name") or "").strip() or f"Голос {cluster['id']}"
+    """Подпись в расшифровке: имя, только если оно подтверждено или программа уверена; иначе «Собеседник»."""
+    return (cluster.get("name") or "").strip() or UNKNOWN
 
 
 def _write_json(path, data):
@@ -338,7 +362,7 @@ def analyze(wav, embedder, profiles, progress=None, should_stop=None, speakers=N
             continue                                           # случайные короткие обрывки — не голос
         cid = len(clusters) + 1
         cent = _unit(np.mean([v for *_x, v in g], axis=0))
-        name, score = profiles.best_match(cent)
+        name, guess, score = profiles.judge(cent)
         by_seg = {}
         for i, a, b, _v in g:
             by_seg.setdefault(i, []).append((a, b))
@@ -348,7 +372,7 @@ def analyze(wav, embedder, profiles, progress=None, should_stop=None, speakers=N
             a = min(x for x, _y in w)
             b = max(y for _x, y in w)
             clips.append({"start": round(a, 2), "end": round(min(b, a + CLIP_SEC), 2)})
-        clusters.append({"id": cid, "name": name, "auto": bool(name), "score": round(score, 3),
+        clusters.append({"id": cid, "name": name, "auto": bool(name), "score": round(score, 3), "guess": guess,
                          "seconds": round(total, 1), "clips": clips,
                          "centroid": [round(float(x), 5) for x in cent]})
         for i, a, b, _v in g:
@@ -453,6 +477,26 @@ def reassign_segments(wav, indexes, name, embedder, profiles):
     return sp
 
 
+def demote_unsure(wav):
+    """Записи прошлых версий: имена, подставленные без уверенности, становятся предположениями,
+    а реплики — «Собеседник». Подтверждённые вами имена не трогаются. Возвращает True, если что-то поменялось."""
+    sp = read_speakers(wav)
+    if not sp:
+        return False
+    changed = False
+    for c in sp.get("clusters", []):
+        if c.get("auto") and (c.get("name") or "").strip() and float(c.get("score", 0)) < AUTO_SURE:
+            c["guess"], c["name"], c["auto"] = c["name"], "", False
+            changed = True
+    if changed:
+        _write_json(speakers_path(wav), sp)
+        try:
+            apply_names(wav)
+        except (OSError, ValueError):
+            pass
+    return changed
+
+
 def segments_for_clip(wav, cluster_id, clip):
     """Номера реплик этого голоса, из которых взят отрывок."""
     sp = read_speakers(wav) or {}
@@ -472,7 +516,8 @@ def game_rounds(wav, limit=10):
     [(номер, начало, конец, текст, предполагаемое_имя)]."""
     sp = read_speakers(wav) or {}
     segs = json.loads(tr.output_paths(wav)[1].read_text(encoding="utf-8")).get("segments") or []
-    names = {c["id"]: (c.get("name") or "").strip() for c in sp.get("clusters", [])}
+    names = {c["id"]: ((c.get("name") or "").strip() or (c.get("guess") or "").strip())
+             for c in sp.get("clusters", [])}             # неуверенные предположения тоже проверяем в игре
     per = {}
     for i, cid in sorted((sp.get("assign") or {}).items(), key=lambda kv: int(kv[0])):
         i = int(i)
@@ -515,9 +560,12 @@ def rematch(wav, profiles):
     changed = False
     for c in sp["clusters"]:
         if not (c.get("name") or "").strip() and c.get("centroid"):
-            name, score = profiles.best_match(np.asarray(c["centroid"], dtype=np.float32))
+            name, guess, score = profiles.judge(np.asarray(c["centroid"], dtype=np.float32))
             if name:
-                c["name"], c["auto"], c["score"] = name, True, round(score, 3)
+                c["name"], c["auto"], c["score"], c["guess"] = name, True, round(score, 3), ""
+                changed = True
+            elif guess != c.get("guess"):
+                c["guess"], c["score"] = guess, round(score, 3)
                 changed = True
     if changed:
         _write_json(speakers_path(wav), sp)

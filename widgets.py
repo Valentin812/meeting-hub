@@ -25,6 +25,72 @@ def _round_rect(canvas, x1, y1, x2, y2, r, **kw):
     return canvas.create_polygon(pts, smooth=True, **kw)
 
 
+class _Flow:
+    """Раскладка «в строку с переносом» для уже созданной рамки: кнопки, не помещающиеся по ширине,
+    уходят на следующую строку, а не за край окна."""
+
+    def __init__(self, frame, items, vgap=6):
+        self.frame, self.items, self.vgap = frame, items, vgap
+        self._job = None
+        frame.bind("<Configure>", lambda _e: self.relayout(), add="+")
+        for widget, _gap in items:
+            widget.bind("<Configure>", lambda _e: self.relayout(), add="+")
+        self.relayout()
+
+    def relayout(self):
+        if self._job is None:
+            try:
+                self._job = self.frame.after_idle(self._layout)
+            except tk.TclError:
+                pass
+
+    def _width(self):
+        width = self.frame.winfo_width()
+        w = self.frame
+        while width <= 1 and w.master is not None:         # рамка ещё без размера — берём ширину родителя
+            w = w.master
+            width = w.winfo_width()
+        return width if width > 1 else 10 ** 6
+
+    def _layout(self):
+        self._job = None
+        try:
+            width, x, y, row_h = self._width(), 0, 0, 0
+            for widget, gap in self.items:
+                if not widget.winfo_exists():
+                    continue
+                ww, wh = widget.winfo_reqwidth(), widget.winfo_reqheight()
+                if x > 0:
+                    x += gap
+                    if x + ww > width:
+                        x, y, row_h = 0, y + row_h + self.vgap, 0
+                widget.place(in_=self.frame, x=x, y=y)
+                x += ww
+                row_h = max(row_h, wh)
+            self.frame.configure(height=max(1, y + row_h))
+        except tk.TclError:
+            pass
+
+
+def flowify(frame, vgap=6):
+    """Переложить кнопки рамки (упакованные side="left") в строки с переносом. Вызывать после их создания."""
+    items = []
+    for widget in frame.pack_slaves():
+        info = widget.pack_info()
+        if info.get("side") != "left":
+            continue
+        pad = info.get("padx", 0)
+        gap = int(pad[0] if isinstance(pad, (tuple, list)) else str(pad).split()[0] or 0)
+        widget.pack_forget()
+        items.append((widget, gap))
+    try:
+        frame.pack_configure(fill="x")
+    except tk.TclError:
+        pass
+    frame._flow = _Flow(frame, items, vgap)
+    return frame
+
+
 class Pill(tk.Canvas):
     """Скруглённая метка: текст на цветном фоне."""
 
