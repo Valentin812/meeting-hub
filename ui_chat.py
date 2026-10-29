@@ -33,6 +33,10 @@ class ChatUI:
         self.chat_btn = ttk.Button(row, text="Спросить", style="Accent.TButton", command=self.chat_send)
         self.chat_btn.pack(side="left", padx=(6, 0))
         ttk.Button(row, text="Очистить", command=self.chat_clear).pack(side="left", padx=(6, 0))
+        game = ttk.Frame(tab)
+        game.pack(fill="x", pady=(6, 0))
+        ttk.Button(game, text="🎯 Игра «Кто говорит?» — научить программу голосам",
+                   command=lambda: self.voice_game(self.selected)).pack(side="left")
         self.chat_note = ttk.Label(tab, style="Small.TLabel", wraplength=560, justify="left",
                                    text=self.chat_note_text())
         self.chat_note.pack(anchor="w", pady=(4, 0))
