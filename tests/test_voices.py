@@ -134,6 +134,22 @@ class VoicesTests(unittest.TestCase):
         with self.assertRaises(voices.VoicesError):
             voices.reassign_segments(wav, [], "Ольга", FakeEmbedder(), self.profiles)
 
+    def test_clip_segments_and_game_rounds(self):
+        wav = make_meeting(self.tmp / "g", [("A", 6), ("B", 7), ("A", 5), ("B", 6)])
+        sp = voices.analyze(wav, FakeEmbedder(), self.profiles)
+        a_id = int(sp["assign"]["0"])
+        voices.name_voice(wav, a_id, "Иван", self.profiles)
+        clip = next(c for c in voices.read_speakers(wav)["clusters"] if c["id"] == a_id)["clips"][0]
+        self.assertIn(voices.segments_for_clip(wav, a_id, clip)[0], (0, 2))
+        rounds = voices.game_rounds(wav)
+        self.assertTrue(rounds)
+        self.assertTrue(all(r[4] == "Иван" for r in rounds))        # только подписанные голоса
+        # отрывок перенесли другому человеку — у Ивана он пропадает
+        seg = voices.segments_for_clip(wav, a_id, clip)
+        voices.reassign_segments(wav, seg, "Ольга", FakeEmbedder(), self.profiles)
+        ivan = next(c for c in voices.read_speakers(wav)["clusters"] if c["id"] == a_id)
+        self.assertNotIn(clip["start"], [c["start"] for c in ivan["clips"]])
+
     def test_confirm_auto_voice_adds_training(self):
         w1 = make_meeting(self.tmp / "c1", [("A", 8), ("B", 8)])
         sp = voices.analyze(w1, FakeEmbedder(), self.profiles)

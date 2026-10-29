@@ -141,42 +141,66 @@ class VoicesUI:
             messagebox.showinfo("Голоса", "Выделены только ваши реплики (микрофон) — они подписаны сами.",
                                 parent=self.root)
             return
+        self.ask_person(wav, f"Выбрано реплик: {len(idx)}. Кто их на самом деле говорит?",
+                        lambda name: self._run_reassign(wav, idx, name))
+
+    NEW_PERSON = "＋ Новый участник…"
+
+    def person_names(self, wav):
         names = list(self.voice_profiles().names())
         for c in (voices.read_speakers(wav) or {}).get("clusters", []):
             if (c.get("name") or "").strip() and c["name"] not in names:
                 names.append(c["name"])
-        win = tk.Toplevel(self.root)
+        return sorted(names)
+
+    def ask_person(self, wav, question, on_name, parent=None):
+        """Окно «Кто это говорит?»: выбрать человека из списка или добавить нового."""
+        win = tk.Toplevel(parent or self.root)
         win.title("Кто это говорит?")
-        win.transient(self.root)
+        win.transient(parent or self.root)
         win.resizable(False, False)
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Выбрано реплик: {len(idx)}. Кто их на самом деле говорит?",
-                  wraplength=360, justify="left").pack(anchor="w")
+        ttk.Label(frm, text=question, wraplength=380, justify="left").pack(anchor="w")
         var = tk.StringVar()
-        box = ttk.Combobox(frm, textvariable=var, values=sorted(names), width=34)
-        box.pack(anchor="w", pady=(10, 4))
+        row = ttk.Frame(frm)
+        row.pack(anchor="w", fill="x", pady=(10, 4))
+        box = ttk.Combobox(row, textvariable=var, values=self.person_names(wav) + [self.NEW_PERSON], width=30)
+        box.pack(side="left")
+        hint = ttk.Label(frm, text="Выберите из списка или нажмите «Новый участник» и впишите имя. Программа "
+                         "запомнит его голос по этим репликам.", style="Small.TLabel", wraplength=380,
+                         justify="left")
+
+        def new_person(_e=None):
+            var.set("")
+            hint.config(text="Впишите имя нового участника и нажмите «Применить».")
+            box.focus_set()
+            box.icursor("end")
+        ttk.Button(row, text="＋ Новый участник", command=new_person).pack(side="left", padx=(8, 0))
+        box.bind("<<ComboboxSelected>>", lambda _e: new_person() if var.get() == self.NEW_PERSON else None)
+        hint.pack(anchor="w")
         box.focus_set()
-        ttk.Label(frm, text="Выберите из списка или впишите нового человека. Программа запомнит его голос "
-                  "по этим репликам.", style="Small.TLabel", wraplength=360, justify="left").pack(anchor="w")
         bar = ttk.Frame(frm)
         bar.pack(anchor="e", pady=(14, 0))
 
         def apply():
             name = var.get().strip()
-            if not name:
+            if not name or name == self.NEW_PERSON:
                 return
             win.destroy()
-            self._run_reassign(wav, idx, name)
+            on_name(name)
         ttk.Button(bar, text="Применить", style="Accent.TButton", command=apply).pack(side="left")
         ttk.Button(bar, text="Отмена", command=win.destroy).pack(side="left", padx=(8, 0))
         box.bind("<Return>", lambda _e: apply())
+        return win
 
-    def _run_reassign(self, wav, idx, name):
+    def _run_reassign(self, wav, idx, name, quiet=False, then=None):
+        """Перенести реплики к человеку и запомнить голос (в фоне). quiet — без обновления протокола (игра)."""
         profiles = self.voice_profiles()
         data_dir = self.data_dir
-        self.last_event_text = "Запоминаю голос и исправляю подписи…"
-        self.refresh_status()
+        if not quiet:
+            self.last_event_text = "Запоминаю голос и исправляю подписи…"
+            self.refresh_status()
 
         def work():
             try:
@@ -195,6 +219,9 @@ class VoicesUI:
                 err = str(e)
 
             def done():
+                if then is not None:
+                    then(err)
+                    return
                 self.last_event_text = ""
                 if err:
                     messagebox.showwarning("Голоса", err, parent=self.root)
@@ -205,6 +232,114 @@ class VoicesUI:
                 self.refresh_status()
             self._ui_calls.put((done, ()))
         threading.Thread(target=work, name="voice-fix", daemon=True).start()
+
+    def clip_is_other(self, wav, cluster_id, clip):
+        idx = voices.segments_for_clip(wav, cluster_id, clip)
+        if not idx:
+            messagebox.showinfo("Голоса", "Не нашлась реплика этого отрывка — определите голоса заново.",
+                                parent=self.root)
+            return
+        self.ask_person(wav, "Кто говорит в этом отрывке?", lambda name: self._run_reassign(wav, idx, name))
+
+    # ------------------------------------------------------------------
+    # Игра «Кто говорит?»: программа предлагает реплику и имя, вы подтверждаете или исправляете
+    # ------------------------------------------------------------------
+    def voice_game(self, wav=None):
+        wav = Path(wav or self.selected or "")
+        if not wav.name or not wav.exists():
+            messagebox.showinfo("Кто говорит?", "Выберите встречу с сохранённым аудио.", parent=self.root)
+            return
+        if not voices.read_speakers(wav):
+            messagebox.showinfo("Кто говорит?", "Сначала определите голоса этой встречи (вкладка «Голоса»).",
+                                parent=self.root)
+            return
+        rounds = voices.game_rounds(wav)
+        if not rounds:
+            messagebox.showinfo("Кто говорит?", "Подпишите хотя бы один голос на вкладке «Голоса» — "
+                                "тогда будет что проверять.", parent=self.root)
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Кто говорит?")
+        win.transient(self.root)
+        win.geometry("560x380")
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+        step = ttk.Label(frm, style="Small.TLabel")
+        step.pack(anchor="w")
+        quote = ttk.Label(frm, wraplength=520, justify="left", font=(theme.FONT, 11))
+        quote.pack(anchor="w", fill="x", pady=(10, 10))
+        ask = ttk.Label(frm, font=(theme.FONT, 13, "bold"))
+        ask.pack(anchor="w")
+        btns = ttk.Frame(frm)
+        btns.pack(anchor="w", pady=(14, 0))
+        note = ttk.Label(frm, style="Small.TLabel", wraplength=520, justify="left")
+        note.pack(anchor="w", pady=(14, 0))
+        state = {"n": 0, "yes": 0, "fixed": 0, "busy": False}
+
+        def show():
+            if not win.winfo_exists():
+                return
+            if state["n"] >= len(rounds):
+                finish()
+                return
+            _i, a, b, text, name = rounds[state["n"]]
+            step.config(text=f"Вопрос {state['n'] + 1} из {len(rounds)}")
+            quote.config(text="«" + (text if len(text) < 400 else text[:400] + "…") + "»")
+            ask.config(text=f"Это {name}?")
+            self.play_clip(wav, {"start": a, "end": min(b, a + 12.0)})
+
+        def next_round(err=""):
+            state["busy"] = False
+            if err:
+                note.config(text="Не получилось: " + err[:150])
+            state["n"] += 1
+            show()
+
+        def yes():
+            if state["busy"]:
+                return
+            i, _a, _b, _t, name = rounds[state["n"]]
+            state["busy"], state["yes"] = True, state["yes"] + 1
+            note.config(text=f"Запоминаю: это {name}.")
+            self._run_reassign(wav, [i], name, quiet=True, then=next_round)
+
+        def no():
+            if state["busy"]:
+                return
+            i = rounds[state["n"]][0]
+
+            def chosen(other):
+                state["busy"], state["fixed"] = True, state["fixed"] + 1
+                note.config(text=f"Исправляю: это {other}.")
+                self._run_reassign(wav, [i], other, quiet=True, then=next_round)
+            self.ask_person(wav, "Кто это на самом деле?", chosen, parent=win)
+
+        def finish():
+            if state.get("done"):
+                return
+            state["done"] = True
+            for w in btns.winfo_children():
+                w.destroy()
+            step.config(text="Готово")
+            quote.config(text="")
+            ask.config(text=f"Подтверждено: {state['yes']}, исправлено: {state['fixed']}")
+            note.config(text="Голоса запомнены — в следующих встречах люди будут узнаваться точнее.")
+            ttk.Button(btns, text="Закрыть", style="Accent.TButton", command=win.destroy).pack(side="left")
+            if state["yes"] or state["fixed"]:
+                self._journal_note("Игра «Кто говорит?»", f"{wav.name}: подтверждено {state['yes']}, "
+                                   f"исправлено {state['fixed']}", "user", file=wav.name)
+                self._voices_changed(wav)
+
+        ttk.Button(btns, text="Да", style="Accent.TButton", width=8, command=yes).pack(side="left")
+        ttk.Button(btns, text="Нет, это…", command=no).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Не знаю", command=lambda: next_round()).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="▶ Ещё раз", command=lambda: self.play_clip(
+            wav, {"start": rounds[state["n"]][1], "end": min(rounds[state["n"]][2], rounds[state["n"]][1] + 12.0)})
+                   if state["n"] < len(rounds) else None).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Закончить", command=finish).pack(side="left", padx=(8, 0))
+        win.bind("<Return>", lambda _e: yes())
+        win.protocol("WM_DELETE_WINDOW", lambda: (finish(), win.destroy()))
+        show()
 
     def build_voices_tab(self, nb):
         self.voices_tab = ttk.Frame(nb, padding=(4, 10, 4, 0))
@@ -262,8 +397,19 @@ class VoicesUI:
                 b.pack(side="left", padx=(0, 4))
                 if not wav.exists():
                     b.state(["disabled"])
+            if wav.exists() and c.get("clips"):
+                mb = ttk.Menubutton(clips, text="Не тот?")
+                menu = tk.Menu(mb, tearoff=False)
+                for k, clip in enumerate(c["clips"]):
+                    menu.add_command(label=f"Отрывок {k + 1} — это другой человек…",
+                                     command=lambda cl=clip, cid=c["id"]: self.clip_is_other(wav, cid, cl))
+                mb["menu"] = menu
+                mb.pack(side="left", padx=(4, 0))
             var = tk.StringVar(value=c.get("name", ""))
-            ttk.Combobox(grid, textvariable=var, values=names, width=22).grid(row=row, column=3, sticky="w")
+            cb = ttk.Combobox(grid, textvariable=var, values=names + [self.NEW_PERSON], width=22)
+            cb.grid(row=row, column=3, sticky="w")
+            cb.bind("<<ComboboxSelected>>", lambda _e, v=var, w=cb: (v.set(""), w.focus_set())
+                    if v.get() == self.NEW_PERSON else None)
             if c.get("auto"):
                 ttk.Label(grid, text="узнан по голосу", style="Small.TLabel").grid(row=row, column=4, padx=8)
             self._voice_rows.append((c, var))
@@ -272,6 +418,8 @@ class VoicesUI:
         ttk.Button(bar, text="Сохранить имена", style="Accent.TButton",
                    command=lambda: self.save_voice_names(wav)).pack(side="left")
         ttk.Button(bar, text="Подписать по известным", command=lambda: self.rematch_voices(wav)).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bar, text="🎯 Игра «Кто говорит?»", command=lambda: self.voice_game(wav)).pack(
             side="left", padx=(8, 0))
         self._count_row(tab, wav, sp, "Определить заново")
         found = len(clusters)

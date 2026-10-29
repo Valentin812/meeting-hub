@@ -439,6 +439,11 @@ def reassign_segments(wav, indexes, name, embedder, profiles):
         a, b = float(segs[i].get("start", 0)), float(segs[i].get("end", 0))
         cluster["clips"] = (cluster.get("clips") or [])[:CLIPS - 1] + [
             {"start": round(a, 2), "end": round(min(b, a + CLIP_SEC), 2)}]
+    moved = [(float(segs[i].get("start", 0)), float(segs[i].get("end", 0))) for i in idx]
+    for c in sp["clusters"]:
+        if c is not cluster and c.get("clips"):          # отрывки этих реплик больше не про того человека
+            c["clips"] = [cl for cl in c["clips"]
+                          if not any(a - 0.5 <= float(cl["start"]) < b for a, b in moved)]
     for i in idx:
         sp["assign"][str(i)] = cluster["id"]
     profiles.learn(name, [cent])
@@ -446,6 +451,46 @@ def reassign_segments(wav, indexes, name, embedder, profiles):
     _write_json(speakers_path(wav), sp)
     apply_names(wav)
     return sp
+
+
+def segments_for_clip(wav, cluster_id, clip):
+    """Номера реплик этого голоса, из которых взят отрывок."""
+    sp = read_speakers(wav) or {}
+    segs = json.loads(tr.output_paths(wav)[1].read_text(encoding="utf-8")).get("segments") or []
+    a, b = float(clip["start"]), float(clip["end"])
+    out = [int(i) for i, cid in (sp.get("assign") or {}).items()
+           if cid == cluster_id and int(i) < len(segs)
+           and float(segs[int(i)].get("start", 0)) < b and float(segs[int(i)].get("end", 0)) > a]
+    return sorted(out)
+
+
+GAME_MIN_SEC = 2.5
+
+
+def game_rounds(wav, limit=10):
+    """Реплики для игры «кто говорит?»: по очереди от каждого подписанного голоса, разные места встречи.
+    [(номер, начало, конец, текст, предполагаемое_имя)]."""
+    sp = read_speakers(wav) or {}
+    segs = json.loads(tr.output_paths(wav)[1].read_text(encoding="utf-8")).get("segments") or []
+    names = {c["id"]: (c.get("name") or "").strip() for c in sp.get("clusters", [])}
+    per = {}
+    for i, cid in sorted((sp.get("assign") or {}).items(), key=lambda kv: int(kv[0])):
+        i = int(i)
+        if i >= len(segs) or not names.get(cid):
+            continue
+        s = segs[i]
+        if float(s.get("end", 0)) - float(s.get("start", 0)) >= GAME_MIN_SEC and (s.get("text") or "").strip():
+            per.setdefault(cid, []).append(i)
+    picks = {cid: [lst[int(k * len(lst) / min(len(lst), limit))] for k in range(min(len(lst), limit))]
+             for cid, lst in per.items()}                     # равномерно по встрече
+    rounds = []
+    while len(rounds) < limit and any(picks.values()):
+        for cid in sorted(picks):
+            if picks[cid] and len(rounds) < limit:
+                i = picks[cid].pop(0)
+                s = segs[i]
+                rounds.append((i, float(s["start"]), float(s["end"]), s["text"].strip(), names[cid]))
+    return rounds
 
 
 def confirm_voice(wav, cluster_id, profiles):
