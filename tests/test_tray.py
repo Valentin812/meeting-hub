@@ -32,8 +32,8 @@ class MuteLabelTests(unittest.TestCase):
         self.assertIn("Включить", tray.Tray.mute_label(True))
         self.assertIn("Не писать", tray.Tray.system_label(False))
         self.assertIn("Снова писать", tray.Tray.system_label(True))
-        self.assertIn("Включить звуки", tray.Tray.sounds_label(True))
-        self.assertIn("Отключить звуки", tray.Tray.sounds_label(False))
+        self.assertIn("Вернуть звуки", tray.Tray.sounds_label(True))
+        self.assertIn("Заглушить звуки", tray.Tray.sounds_label(False))
         self.assertIn("Снять", tray.Tray.confidential_label(True))
         self.assertIn("конфиденциальная", tray.Tray.confidential_label(False))
 

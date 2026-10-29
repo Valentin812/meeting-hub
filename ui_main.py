@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
+import appmute
 import daily
 import gigachat
 import recorder as rec_mod
@@ -1189,6 +1190,16 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         ttk.Checkbutton(p, text="Отключать звуки Windows на время записи", variable=w_snd).pack(anchor="w")
         hint(p, "Сообщения и «дзынь» уведомлений Windows не попадут в запись. После записи звуки возвращаются. "
                 "Включить их раньше можно в меню значка у часов. Звуки мессенджеров и браузера это не отключает.")
+        m_apps = tk.BooleanVar(value=bool(s.get("mute_apps", True)))
+        ttk.Checkbutton(p, text="Заглушать звуки мессенджеров и почты на время записи", variable=m_apps).pack(anchor="w")
+        hint(p, "Звук у перечисленных программ выключается только на время записи (как в микшере громкости "
+                "Windows) и потом возвращается. Программа встречи не затрагивается.")
+        m_list = tk.StringVar(value=s.get("mute_apps_list", appmute.DEFAULT_LIST))
+        ttk.Entry(p, textvariable=m_list, width=62).pack(anchor="w", padx=(28, 0))
+        hint(p, "Имена программ через запятую (как в диспетчере задач).")
+        m_all = tk.BooleanVar(value=bool(s.get("mute_apps_all", False)))
+        ttk.Checkbutton(p, text="Заглушать вообще все программы, кроме браузеров и программ для встреч",
+                        variable=m_all).pack(anchor="w", pady=(0, 10))
         heading(p, "Если запись не работает")
         for text, cmd in (("Мастер настройки", self.open_first_run),
                           ("Подробная проверка звука", self.full_audio_check),
@@ -1364,7 +1375,9 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
                      giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip(),
-                     kanban_auto=bool(k_auto.get()), mute_win_sounds=bool(w_snd.get()), privacy_mask=bool(p_mask.get()),
+                     kanban_auto=bool(k_auto.get()), mute_win_sounds=bool(w_snd.get()), mute_apps=bool(m_apps.get()),
+                     mute_apps_list=m_list.get().strip() or appmute.DEFAULT_LIST, mute_apps_all=bool(m_all.get()),
+                     privacy_mask=bool(p_mask.get()),
                      kanban_transcript=bool(k_text.get()), privacy_words=p_words.get().strip())
             for old_key in ("salute_enabled", "salute_key", "salute_scope", "salute_insecure"):
                 s.pop(old_key, None)                      # SaluteSpeech из программы убран
