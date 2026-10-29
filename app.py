@@ -419,6 +419,7 @@ class App(MainWindow):
             self.log.exception("Ошибка цикла обнаружения")
             self.last_event_text = "Ошибка цикла обнаружения — подробности в meeting_hub.log"
         finally:
+            self.check_muted_speech()
             tq = getattr(self, "tq", None)
             if tq is not None:
                 tq.set_paused(self.detector.blocks_analysis)
@@ -1127,6 +1128,26 @@ class App(MainWindow):
         self.last_event_text = ("Встреча конфиденциальная: итоги только локально, в облако не уйдёт." if rec.confidential
                                 else "Пометка «Конфиденциально» снята.")
         self.refresh_status()
+
+    def check_muted_speech(self):
+        """Микрофон в записи выключен, а вы заговорили (скорее всего, включили микрофон во встрече) —
+        включаем его и в записи, чтобы ваш голос не потерялся. Можно отключить в настройках."""
+        rec = self.recorder
+        if rec is None or not rec.mic_muted or not getattr(rec, "muted_speech", False):
+            return
+        rec.muted_speech = False
+        if self.settings.get("auto_unmute_mic", True):
+            self.toggle_mic_mute()
+            self._journal_note("Микрофон в записи включён сам", "Вы заговорили, а микрофон в записи был выключен",
+                               "auto")
+            self.toast("Вы заговорили — ваш микрофон в записи снова включён.", seconds=12,
+                       action=("Выключить снова", lambda: self.recorder is not None
+                               and not self.recorder.mic_muted and self.toggle_mic_mute()))
+        elif not getattr(self, "_muted_speech_asked", False):
+            self._muted_speech_asked = True
+            self.toast("Вы говорите, а ваш микрофон в записи выключен.", seconds=20,
+                       action=("Включить", lambda: self.recorder is not None and self.recorder.mic_muted
+                               and self.toggle_mic_mute()))
 
     def toggle_system_mute(self):
         """Не писать звук компьютера (собеседники и системные звуки) / снова писать."""

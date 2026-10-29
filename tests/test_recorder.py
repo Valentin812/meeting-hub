@@ -120,6 +120,27 @@ class Realtime(Base):
         meta = json.loads(result["path"].with_suffix(".json").read_text(encoding="utf-8"))
         self.assertGreater(meta["mic_muted_sec"], 0.8)
 
+    def test_speech_while_mic_muted_raises_flag(self):
+        rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.5), "system": ToneSource(-0.25)}),
+                            rate=RATE, block_sec=0.1)
+        rec.start({})
+        rec.set_mic_muted(True)
+        self.assertFalse(rec.muted_speech)
+        time.sleep(2.2)                                        # «говорим» в выключенный микрофон
+        self.assertTrue(rec.muted_speech)
+        rec.set_mic_muted(False)
+        self.assertFalse(rec.muted_speech)
+        rec.stop()
+
+    def test_silence_while_mic_muted_keeps_quiet(self):
+        rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.001), "system": ToneSource(-0.25)}),
+                            rate=RATE, block_sec=0.1)
+        rec.start({})
+        rec.set_mic_muted(True)
+        time.sleep(2.2)
+        self.assertFalse(rec.muted_speech)
+        rec.stop()
+
     def test_confidential_mark_during_recording(self):
         rec = AudioRecorder(self.dir, Backend({"mic": ToneSource(0.5), "system": ToneSource(-0.25)}),
                             rate=RATE, block_sec=0.1)

@@ -32,6 +32,8 @@ SOURCES = ("mic", "system")
 SOURCE_LABELS = {"mic": "микрофон", "system": "звук компьютера"}
 MIN_FREE_BYTES = 300 * 1024 * 1024
 GAP_TOLERANCE_SEC = 0.3
+MUTED_SPEECH_RMS = 0.02      # громкость речи в микрофоне (шкала −1…1); тише — шум, клавиатура
+MUTED_SPEECH_SEC = 1.5       # столько речи (с затуханием) при выключенном микрофоне — «вы заговорили»
 MAX_GAP_SEC = 12 * 3600
 
 
@@ -416,6 +418,7 @@ class AudioRecorder:
         self.mic_muted = False          # «выключить мой голос в записи»: пока включено, дорожка микрофона тихая
         self.system_muted = False       # «не писать звук компьютера»: дорожка собеседников и системных звуков тихая
         self.muted_sec = {"mic": 0.0, "system": 0.0}
+        self.muted_speech = False       # при выключенном микрофоне в записи слышна речь
         self._muted_since = {"mic": None, "system": None}
         self.t0 = None
         self.stem = ""
@@ -475,6 +478,22 @@ class AudioRecorder:
     def set_mic_muted(self, value):
         """Микрофон в записи: True — вместо вашего голоса тишина (участники вас слышат как обычно)."""
         self._set_muted("mic", value)
+        self._muted_talk = 0.0
+        self.muted_speech = False
+
+    def _watch_muted_speech(self, block):
+        """Микрофон в записи выключен, а вы говорите (например, включили микрофон во встрече) —
+        поднимаем флаг muted_speech; программа сама включит микрофон в записи."""
+        x = np.asarray(block, dtype=np.float32)
+        if not len(x):
+            return
+        rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
+        dur = len(x) / float(self.rate)
+        talk = getattr(self, "_muted_talk", 0.0)
+        talk = talk + dur if rms >= MUTED_SPEECH_RMS else max(0.0, talk - dur * 0.5)
+        self._muted_talk = talk
+        if talk >= MUTED_SPEECH_SEC:
+            self.muted_speech = True
 
     def set_system_muted(self, value):
         """Звук компьютера в записи: True — тишина вместо собеседников и системных звуков."""
@@ -516,6 +535,8 @@ class AudioRecorder:
                     break
                 if block is not None and len(block):
                     if getattr(self, name + "_muted", False):
+                        if name == "mic":
+                            self._watch_muted_speech(block)
                         block = np.zeros_like(block)
                     self._queue.put((name, t, block))
         except Exception as e:

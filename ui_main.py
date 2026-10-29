@@ -1193,6 +1193,11 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             "Программа покажет, слышны ли вы и собеседники.")).pack(anchor="w")
         self.test_btn = ttk.Button(p, text="Проверить запись", style="Accent.TButton", command=self.test_recording)
         self.test_btn.pack(anchor="w", pady=(8, 16))
+        a_mic = tk.BooleanVar(value=bool(s.get("auto_unmute_mic", True)))
+        ttk.Checkbutton(p, text="Включать мой микрофон в записи, когда я начинаю говорить", variable=a_mic).pack(
+            anchor="w")
+        hint(p, "Если вы выключили микрофон в записи (значок у часов), а потом включили его во встрече и заговорили, "
+                "запись снова будет слышать ваш голос. Без галочки программа только спросит.")
         w_snd = tk.BooleanVar(value=bool(s.get("mute_win_sounds", True)))
         ttk.Checkbutton(p, text="Отключать звуки Windows на время записи", variable=w_snd).pack(anchor="w")
         hint(p, "Сообщения и «дзынь» уведомлений Windows не попадут в запись. После записи звуки возвращаются. "
@@ -1382,7 +1387,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
                      giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip(),
-                     kanban_auto=bool(k_auto.get()), mute_win_sounds=bool(w_snd.get()), mute_apps=bool(m_apps.get()),
+                     kanban_auto=bool(k_auto.get()), mute_win_sounds=bool(w_snd.get()), auto_unmute_mic=bool(a_mic.get()), mute_apps=bool(m_apps.get()),
                      mute_apps_list=m_list.get().strip() or appmute.DEFAULT_LIST, mute_apps_all=bool(m_all.get()),
                      privacy_mask=bool(p_mask.get()),
                      kanban_transcript=bool(k_text.get()), privacy_words=p_words.get().strip())
