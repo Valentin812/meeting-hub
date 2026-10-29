@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox
 import theme
 import transcriber as tr_mod
 import voices
+import widgets
 
 
 class VoicesUI:
@@ -261,7 +262,7 @@ class VoicesUI:
         win = tk.Toplevel(self.root)
         win.title("Кто говорит?")
         win.transient(self.root)
-        win.geometry("560x380")
+        win.minsize(560, 320)
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
         step = ttk.Label(frm, style="Small.TLabel")
@@ -348,6 +349,7 @@ class VoicesUI:
                    if state["n"] < len(rounds) else None).pack(side="left", padx=(8, 0))
         ttk.Button(btns, text="Закончить", command=finish).pack(side="left", padx=(8, 0))
         win.bind("<Return>", lambda _e: yes())
+        widgets.flowify(btns)
         win.protocol("WM_DELETE_WINDOW", lambda: (finish(), win.destroy()))
         show()
 
@@ -461,6 +463,7 @@ class VoicesUI:
             side="left", padx=(8, 0))
         ttk.Button(bar, text="🎯 Игра «Кто говорит?»", command=lambda: self.voice_game(wav)).pack(
             side="left", padx=(8, 0))
+        widgets.flowify(bar)
         self._count_row(tab, wav, sp, "Определить заново")
         found = len(clusters)
         ttk.Label(tab, text=f"Найдено голосов: {found}. Если людей было больше или меньше — укажите число и "
@@ -497,6 +500,7 @@ class VoicesUI:
             ttk.Button(row, text="＋ Ещё голос", command=lambda: plus(1)).pack(side="left", padx=(8, 0))
             if found > 1:
                 ttk.Button(row, text="− Лишний", command=lambda: plus(-1)).pack(side="left", padx=(4, 0))
+        widgets.flowify(row)
         return row
 
     def play_clip(self, wav, clip):

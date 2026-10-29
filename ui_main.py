@@ -182,6 +182,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.more_btn.pack(side="left", padx=(6, 0))
         self.more_menu = tk.Menu(self.more_btn, tearoff=False)
         self.more_btn["menu"] = self.more_menu
+        widgets.flowify(btns)                    # узкое окно — кнопки переносятся, а не уходят за край
 
         # Проигрыватель
         self.pbar = ttk.Frame(head)
@@ -233,6 +234,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             side="left")
         ttk.Button(fix_bar, text="Исправить голос у выделенного…", command=self.fix_selected_voice).pack(
             side="left", padx=(8, 0))
+        widgets.flowify(fix_bar)
         self.tr_text.bind("<Button-3>", self._transcript_menu)
         self.build_voices_tab(self.detail_nb)
         self.build_chat_tab(self.detail_nb)
@@ -1044,10 +1046,9 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                 self.work.pack_forget()
             self.rec_btn.config(text="■  Остановить" if self.recorder is not None else "●  Записать")
             if self.recorder is not None:
-                self.mute_btn.config(text="🎙 Включить микрофон" if self.recorder.mic_muted else "🔇 Выключить микрофон")
-                self.sysmute_btn.config(text="🔊 Писать звук ПК" if self.recorder.system_muted else "🔇 Не писать звук ПК")
-                self.confrec_btn.config(text="🔓 Снять «Конфиденциально»" if self.recorder.confidential
-                                        else "🔒 Конфиденциально")
+                self.mute_btn.config(text="🎙 Вкл. микрофон" if self.recorder.mic_muted else "🔇 Микрофон")
+                self.sysmute_btn.config(text="🔊 Вкл. звук ПК" if self.recorder.system_muted else "🔇 Звук ПК")
+                self.confrec_btn.config(text="🔓 Не конфи" if self.recorder.confidential else "🔒 Конфи")
                 if not self.mute_btn.winfo_ismapped():
                     self.mute_btn.pack(side="right", padx=(0, 8), before=self.rec_btn)
                     self.sysmute_btn.pack(side="right", padx=(0, 8), before=self.mute_btn)
