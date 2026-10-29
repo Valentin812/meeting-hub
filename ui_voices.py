@@ -314,6 +314,13 @@ class VoicesUI:
                 self._run_reassign(wav, [i], other, quiet=True, then=next_round)
             self.ask_person(wav, "Кто это на самом деле?", chosen, parent=win)
 
+        def skip_many():
+            if state["busy"]:
+                return
+            state["many"] = state.get("many", 0) + 1
+            note.config(text="Пропущено: в отрывке говорят несколько человек — для обучения он не годится.")
+            next_round()
+
         def finish():
             if state.get("done"):
                 return
@@ -322,7 +329,8 @@ class VoicesUI:
                 w.destroy()
             step.config(text="Готово")
             quote.config(text="")
-            ask.config(text=f"Подтверждено: {state['yes']}, исправлено: {state['fixed']}")
+            ask.config(text=f"Подтверждено: {state['yes']}, исправлено: {state['fixed']}"
+                       + (f", пропущено: {state['many']}" if state.get("many") else ""))
             note.config(text="Голоса запомнены — в следующих встречах люди будут узнаваться точнее.")
             ttk.Button(btns, text="Закрыть", style="Accent.TButton", command=win.destroy).pack(side="left")
             if state["yes"] or state["fixed"]:
@@ -333,6 +341,8 @@ class VoicesUI:
         ttk.Button(btns, text="Да", style="Accent.TButton", width=8, command=yes).pack(side="left")
         ttk.Button(btns, text="Нет, это…", command=no).pack(side="left", padx=(8, 0))
         ttk.Button(btns, text="Не знаю", command=lambda: next_round()).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Пропустить: говорят несколько", command=lambda: skip_many()).pack(
+            side="left", padx=(8, 0))
         ttk.Button(btns, text="▶ Ещё раз", command=lambda: self.play_clip(
             wav, {"start": rounds[state["n"]][1], "end": min(rounds[state["n"]][2], rounds[state["n"]][1] + 12.0)})
                    if state["n"] < len(rounds) else None).pack(side="left", padx=(8, 0))
