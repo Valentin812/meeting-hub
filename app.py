@@ -718,7 +718,7 @@ class App(MainWindow):
     # ------------------------------------------------------------------
     def crm_configured(self):
         s = self.settings
-        return bool(s.get("crm_url") and s.get("crm_login") and s.get("crm_password"))
+        return bool(s.get("crm_login") and s.get("crm_password"))
 
     def crm_client(self):
         import crm_sync
@@ -767,14 +767,19 @@ class App(MainWindow):
             self._ui_calls.put((done, ()))
         threading.Thread(target=work, name="crm-push", daemon=True).start()
 
-    def crm_check(self, url, product, login, password, parent=None, on_ok=None):
-        """Проверить вход в CRM; при успехе сохранить настройки (пароль — зашифрованным)."""
+    def crm_check(self, product_name, login, password, parent=None, on_ok=None):
+        """Проверить вход в CRM; при успехе сохранить логин, пароль (зашифрованным) и проект.
+        Адрес CRM зашит в программу, проект берётся из CRM (по умолчанию — проект пользователя)."""
         import crm_sync
+        url = self.settings.get("crm_url") or crm_sync.DEFAULT_URL
 
         def work():
+            products, product = [], ""
             try:
                 pwd = password or crm_sync.unprotect_password(self.settings.get("crm_password"))
-                who = crm_sync.Client(url, product, login, pwd).me()
+                who, default, products = crm_sync.Client(url, "", login, pwd).info()
+                chosen = next((pid for pid, name in products if name == product_name), "")
+                product = chosen or default
                 blob = crm_sync.protect_password(pwd)
                 err = ""
             except Exception as e:
@@ -784,17 +789,22 @@ class App(MainWindow):
                 if err:
                     messagebox.showwarning("CRM", "Не удалось войти: " + err, parent=parent or self.root)
                     return
-                self.settings.update(crm_url=crm_sync.normalize_url(url), crm_product=str(product).strip(),
+                pname = next((name for pid, name in products if pid == product), "")
+                self.settings.update(crm_product=product, crm_product_name=pname, crm_products=products,
                                      crm_login=login.strip(), crm_password=blob, crm_name=who)
                 self._crm = None
                 self.save_settings()
-                messagebox.showinfo("CRM", f"Вход работает: {who}." + ("" if crm_sync.ready() else
-                                    " Отправка протоколов включится, когда будет описан запрос API протоколов."),
+                messagebox.showinfo("CRM", f"Вход работает: {who}." + (f" Проект: {pname}." if pname else ""),
                                     parent=parent or self.root)
                 if on_ok:
                     on_ok()
             self._ui_calls.put((done, ()))
         threading.Thread(target=work, name="crm-check", daemon=True).start()
+
+    def _crm_product_choice(self, name):
+        """Проект, выбранный в списке настроек (если поменяли без повторной проверки входа)."""
+        pid = next((p for p, n in self.settings.get("crm_products") or [] if n == name), None)
+        return {"crm_product": pid, "crm_product_name": name} if pid else {}
 
     def crm_disconnect(self):
         for key in ("crm_password", "crm_name"):

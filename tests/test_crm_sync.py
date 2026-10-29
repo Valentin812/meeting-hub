@@ -29,7 +29,10 @@ class FakeCRM:
         auth = req.get_header("Authorization", "")
         if auth.replace("Bearer ", "") not in self.valid:
             raise urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b'{"error":"expired"}'))
-        return io.BytesIO(json.dumps({"id": "101", "name": "Иван Примеров"}).encode())
+        if path == "/api/products":
+            return io.BytesIO(json.dumps([{"id": 1, "name": "Электронная регистрация и аккредитивы"},
+                                          {"id": 2, "name": "Ремонты"}]).encode())
+        return io.BytesIO(json.dumps({"id": "101", "name": "Иван Примеров", "product_id": 1}).encode())
 
 
 class CrmTests(unittest.TestCase):
@@ -52,6 +55,17 @@ class CrmTests(unittest.TestCase):
         now[0] += 9 * 3600                        # прошло больше 8 часов
         c.me()
         self.assertEqual(crm.logins, 3)
+
+    def test_info_default_project_and_builtin_address(self):
+        crm = FakeCRM()
+        c = crm_sync.Client("", "", "ivan", "secret", opener=lambda req, timeout=30: crm(
+            type("R", (), {**{k: getattr(req, k) for k in ("data", "get_method", "header_items", "get_header")},
+                           "full_url": req.full_url.replace(crm_sync.DEFAULT_URL, "https://example.ru")})(), timeout))
+        self.assertEqual(c.base, crm_sync.DEFAULT_URL)
+        name, default, products = c.info()
+        self.assertEqual((name, default), ("Иван Примеров", "1"))
+        self.assertEqual(products[1], ("2", "Ремонты"))
+        self.assertNotIn("X-product-id", crm.calls[-1][2])                   # без проекта — сервер берёт ваш
 
     def test_bad_password(self):
         c = crm_sync.Client("https://example.ru", 7, "ivan", "wrong", opener=FakeCRM())

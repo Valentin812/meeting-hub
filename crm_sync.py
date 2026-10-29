@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
+DEFAULT_URL = "https://samsonovtsi-chat-713b.twc1.net"     # рабочий адрес API (справка 29.10.2026)
 PROTOCOL_PATH = "/api/protocols"
 TITLE_MAX, PROTOCOL_MAX, TRANSCRIPT_MAX = 200, 60000, 250000
 SESSION_SEC = 8 * 3600
@@ -102,12 +103,12 @@ class Client:
     """Вход по логину и паролю, сессия кэшируется и обновляется сама (при 401 — один повторный вход)."""
 
     def __init__(self, base_url, product_id, login, password, opener=urllib.request.urlopen, clock=time.time):
-        self.base = normalize_url(base_url)
+        self.base = normalize_url(base_url) or DEFAULT_URL
         self.product, self.login_name, self.password = str(product_id or "").strip(), (login or "").strip(), password
         self.opener, self.clock = opener, clock
         self.token, self.until = None, 0.0
-        if not self.base or not self.login_name:
-            raise CrmError("укажите адрес CRM и логин")
+        if not self.login_name:
+            raise CrmError("укажите логин от CRM")
 
     def _login(self):
         data = _request("POST", self.base + "/api/auth/login", {"login": self.login_name, "password": self.password},
@@ -134,8 +135,24 @@ class Client:
             return _request(method, self.base + path, body, headers, opener=self.opener)
 
     def me(self):
+        return self.info()[0]
+
+    def info(self):
+        """(имя, проект_по_умолчанию, [(id, название)]) — проект подставляется сам, вводить номер не нужно."""
         data = self.call("GET", "/api/me")
-        return data.get("name") or data.get("login") or data.get("email") or "вход выполнен"
+        user = data.get("operator") or data.get("user") or data
+        name = user.get("name") or user.get("login") or user.get("email") or "вход выполнен"
+        default = str(user.get("product_id") or data.get("product_id") or "")
+        try:
+            raw = self.call("GET", "/api/products")
+        except CrmError:
+            raw = []
+        items = raw.get("items") or raw.get("products") or [] if isinstance(raw, dict) else raw
+        products = [(str(p.get("id")), str(p.get("name") or p.get("id"))) for p in items
+                    if isinstance(p, dict) and p.get("id") is not None]
+        if not default and len(products) == 1:
+            default = products[0][0]
+        return name, default, products
 
 
 def ready():
