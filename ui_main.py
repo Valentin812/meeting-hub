@@ -1094,15 +1094,19 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         def page(title):
             outer = ttk.Frame(nb)
             nb.add(outer, text=title)
-            cv = tk.Canvas(outer, highlightthickness=0, bd=0, background=self.pal["bg"])
+            page_bg = ttk.Style(win).lookup("TFrame", "background") or self.pal["bg"]
+            cv = tk.Canvas(outer, highlightthickness=0, bd=0, background=page_bg)
             sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
             cv.configure(yscrollcommand=sb.set)
             sb.pack(side="right", fill="y")
             cv.pack(side="left", fill="both", expand=True)
             f = ttk.Frame(cv, padding=16)
             wid = cv.create_window((0, 0), window=f, anchor="nw")
-            f.bind("<Configure>", lambda _e: cv.configure(scrollregion=cv.bbox("all")))
-            cv.bind("<Configure>", lambda e: cv.itemconfigure(wid, width=e.width))
+            def fit(_e=None):
+                cv.itemconfigure(wid, width=cv.winfo_width(), height=max(f.winfo_reqheight(), cv.winfo_height()))
+                cv.configure(scrollregion=cv.bbox("all"))
+            f.bind("<Configure>", fit)
+            cv.bind("<Configure>", fit)
 
             canvases[str(outer)] = (cv, f)
             return f

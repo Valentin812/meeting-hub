@@ -122,8 +122,8 @@ def _configure_ttk(st, pal):
     st.configure("TLabel", background=bg, foreground=tx)
     st.configure("Side.TFrame", background=side)
     st.configure("Side.Small.TLabel", background=side, foreground=pal["muted"], font=(f, 9, bold))
-    st.configure("Title.TLabel", font=(f, 15, "bold"))
-    st.configure("H2.TLabel", font=(f, 13, "bold"))
+    st.configure("Title.TLabel", font=(f, 17 if kind == "flat" else 15, "bold"))
+    st.configure("H2.TLabel", font=(f, 14 if kind == "flat" else 13, "bold"))
     st.configure("Muted.TLabel", foreground=pal["muted"])
     st.configure("Small.TLabel", foreground=pal["muted"], font=(f, 9, bold))
     st.configure("TSeparator", background=br)
@@ -200,6 +200,12 @@ def apply(root, mode="system"):
         _configure_ttk(st, pal)
     except Exception:
         pal["themed"] = False
+    else:
+        try:
+            import modern
+            pal["modern"] = modern.install(root, st, pal)       # скруглённые элементы; при сбое — обычный вид
+        except Exception:
+            pal["modern"] = []
     try:
         root.configure(bg=pal["bg"])
         for opt, val in (("Menu.background", pal["surface"]), ("Menu.foreground", pal["text"]),
