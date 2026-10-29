@@ -342,12 +342,42 @@ class VoicesUI:
         show()
 
     def build_voices_tab(self, nb):
-        self.voices_tab = ttk.Frame(nb, padding=(4, 10, 4, 0))
-        nb.add(self.voices_tab, text="Голоса")
+        """Вкладка с прокруткой: голосов на встрече может быть много."""
+        self.voices_tab = page = ttk.Frame(nb)
+        nb.add(page, text="Голоса")
+        bg = ttk.Style(page).lookup("TFrame", "background") or self.pal["bg"]
+        cv = self.voices_canvas = tk.Canvas(page, highlightthickness=0, bd=0, background=bg)
+        sb = ttk.Scrollbar(page, orient="vertical", command=cv.yview)
+        cv.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        cv.pack(side="left", fill="both", expand=True)
+        body = self.voices_body = ttk.Frame(cv, padding=(4, 10, 12, 10))
+        wid = cv.create_window((0, 0), window=body, anchor="nw")
+
+        def fit(_e=None):
+            cv.itemconfigure(wid, width=cv.winfo_width())
+            cv.configure(scrollregion=(0, 0, cv.winfo_width(), max(body.winfo_reqheight(), cv.winfo_height())))
+        body.bind("<Configure>", fit)
+        cv.bind("<Configure>", fit)
+
+        def wheel(e):
+            w = self.root.winfo_containing(e.x_root, e.y_root)
+            while w is not None:
+                if w is cv:
+                    if body.winfo_reqheight() > cv.winfo_height():
+                        cv.yview_scroll(-1 if e.delta > 0 else 1, "units")
+                    return
+                w = getattr(w, "master", None)
+        self.root.bind_all("<MouseWheel>", wheel, add="+")
         self._voice_rows = []
 
     def render_voices(self, wav):
-        tab = self.voices_tab
+        tab = self.voices_body
+        try:
+            self.voices_canvas.configure(background=ttk.Style(tab).lookup("TFrame", "background") or self.pal["bg"])
+            self.voices_canvas.yview_moveto(0)
+        except tk.TclError:
+            pass
         for child in tab.winfo_children():
             child.destroy()
         self._voice_rows = []
@@ -398,20 +428,20 @@ class VoicesUI:
                 if not wav.exists():
                     b.state(["disabled"])
             if wav.exists() and c.get("clips"):
-                mb = ttk.Menubutton(clips, text="Не тот?")
+                mb = ttk.Menubutton(grid, text="Не тот?")
                 menu = tk.Menu(mb, tearoff=False)
                 for k, clip in enumerate(c["clips"]):
                     menu.add_command(label=f"Отрывок {k + 1} — это другой человек…",
                                      command=lambda cl=clip, cid=c["id"]: self.clip_is_other(wav, cid, cl))
                 mb["menu"] = menu
-                mb.pack(side="left", padx=(4, 0))
+                mb.grid(row=row, column=3, sticky="w", padx=(0, 12))
             var = tk.StringVar(value=c.get("name", ""))
             cb = ttk.Combobox(grid, textvariable=var, values=names + [self.NEW_PERSON], width=22)
-            cb.grid(row=row, column=3, sticky="w")
+            cb.grid(row=row, column=4, sticky="w")
             cb.bind("<<ComboboxSelected>>", lambda _e, v=var, w=cb: (v.set(""), w.focus_set())
                     if v.get() == self.NEW_PERSON else None)
             if c.get("auto"):
-                ttk.Label(grid, text="узнан по голосу", style="Small.TLabel").grid(row=row, column=4, padx=8)
+                ttk.Label(grid, text="узнан по голосу", style="Small.TLabel").grid(row=row, column=5, padx=8)
             self._voice_rows.append((c, var))
         bar = ttk.Frame(tab)
         bar.pack(anchor="w", pady=(14, 0))
