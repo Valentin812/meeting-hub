@@ -120,6 +120,20 @@ class VoicesTests(unittest.TestCase):
         voices.rematch(w2, self.profiles)
         self.assertEqual(sorted(c["name"] for c in voices.read_speakers(w2)["clusters"]), ["Иван", "Пётр"])
 
+    def test_reassign_selected_segments_and_learn(self):
+        wav = make_meeting(self.tmp / "ra", [("A", 6), ("B", 7), ("A", 5), ("B", 6)])
+        voices.analyze(wav, FakeEmbedder(), self.profiles)
+        voices.reassign_segments(wav, [1], "Ольга", FakeEmbedder(), self.profiles)
+        segs = json.loads(tr.output_paths(wav)[1].read_text(encoding="utf-8"))["segments"]
+        self.assertEqual(segs[1]["speaker"], "Ольга")
+        self.assertNotEqual(segs[3]["speaker"], "Ольга")                   # остальные реплики не тронуты
+        self.assertIn("Ольга", self.profiles.people)
+        voices.reassign_segments(wav, [3], "Ольга", FakeEmbedder(), self.profiles)   # тот же человек — тот же голос
+        sp = voices.read_speakers(wav)
+        self.assertEqual(sum(1 for c in sp["clusters"] if c["name"] == "Ольга"), 1)
+        with self.assertRaises(voices.VoicesError):
+            voices.reassign_segments(wav, [], "Ольга", FakeEmbedder(), self.profiles)
+
     def test_confirm_auto_voice_adds_training(self):
         w1 = make_meeting(self.tmp / "c1", [("A", 8), ("B", 8)])
         sp = voices.analyze(w1, FakeEmbedder(), self.profiles)

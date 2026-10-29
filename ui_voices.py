@@ -97,6 +97,113 @@ class VoicesUI:
             pass
         self.show_window()
 
+    # ------------------------------------------------------------------
+    # Исправить голос у выделенных реплик (вкладка «Расшифровка»)
+    # ------------------------------------------------------------------
+    def selected_segments(self):
+        """Номера реплик, которых касается выделение мышью в расшифровке."""
+        text = self.tr_text
+        try:
+            first, last = text.index("sel.first"), text.index("sel.last")
+        except tk.TclError:
+            return []
+        hit = []
+        for i, (_s, _e, tag) in enumerate(getattr(self, "_segments", [])):
+            ranges = text.tag_ranges(tag)
+            if ranges and text.compare(ranges[0], "<", last) and text.compare(ranges[-1], ">", first):
+                hit.append(i)
+        return hit
+
+    def fix_selected_voice(self):
+        wav = self.selected
+        if wav is None:
+            return
+        wav = Path(wav)
+        idx = self.selected_segments()
+        if not idx:
+            messagebox.showinfo("Голоса", "Сначала выделите мышью реплики, у которых неверно определён голос "
+                                "(можно несколько).", parent=self.root)
+            return
+        if not wav.exists():
+            messagebox.showinfo("Голоса", "Аудио удалено — по звуку голос не запомнить.", parent=self.root)
+            return
+        data = tr_mod.output_paths(wav)[1]
+        try:
+            import json
+            segs = json.loads(data.read_text(encoding="utf-8")).get("segments") or []
+        except (OSError, ValueError):
+            segs = []
+        mine = [i for i in idx if i < len(segs) and (segs[i].get("speaker") == tr_mod.SPEAKERS[0])]
+        idx = [i for i in idx if i not in mine]
+        if not idx:
+            messagebox.showinfo("Голоса", "Выделены только ваши реплики (микрофон) — они подписаны сами.",
+                                parent=self.root)
+            return
+        names = list(self.voice_profiles().names())
+        for c in (voices.read_speakers(wav) or {}).get("clusters", []):
+            if (c.get("name") or "").strip() and c["name"] not in names:
+                names.append(c["name"])
+        win = tk.Toplevel(self.root)
+        win.title("Кто это говорит?")
+        win.transient(self.root)
+        win.resizable(False, False)
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Выбрано реплик: {len(idx)}. Кто их на самом деле говорит?",
+                  wraplength=360, justify="left").pack(anchor="w")
+        var = tk.StringVar()
+        box = ttk.Combobox(frm, textvariable=var, values=sorted(names), width=34)
+        box.pack(anchor="w", pady=(10, 4))
+        box.focus_set()
+        ttk.Label(frm, text="Выберите из списка или впишите нового человека. Программа запомнит его голос "
+                  "по этим репликам.", style="Small.TLabel", wraplength=360, justify="left").pack(anchor="w")
+        bar = ttk.Frame(frm)
+        bar.pack(anchor="e", pady=(14, 0))
+
+        def apply():
+            name = var.get().strip()
+            if not name:
+                return
+            win.destroy()
+            self._run_reassign(wav, idx, name)
+        ttk.Button(bar, text="Применить", style="Accent.TButton", command=apply).pack(side="left")
+        ttk.Button(bar, text="Отмена", command=win.destroy).pack(side="left", padx=(8, 0))
+        box.bind("<Return>", lambda _e: apply())
+
+    def _run_reassign(self, wav, idx, name):
+        profiles = self.voice_profiles()
+        data_dir = self.data_dir
+        self.last_event_text = "Запоминаю голос и исправляю подписи…"
+        self.refresh_status()
+
+        def work():
+            try:
+                ok, why = voices.available()
+                if not ok:
+                    raise voices.VoicesError(why)
+                if not voices.model_ready(data_dir):
+                    voices.download_model(data_dir)
+                emb = getattr(self, "_embedder", None)
+                if emb is None:
+                    emb = self._embedder = voices.Embedder(voices.model_path(data_dir))
+                voices.reassign_segments(wav, idx, name, emb, profiles)
+                err = ""
+            except Exception as e:
+                self.log.exception("Исправление голоса")
+                err = str(e)
+
+            def done():
+                self.last_event_text = ""
+                if err:
+                    messagebox.showwarning("Голоса", err, parent=self.root)
+                else:
+                    self._journal_note("Голос исправлен", f"{wav.name}: реплик {len(idx)} → {name}", "user",
+                                       file=wav.name)
+                    self._voices_changed(wav)
+                self.refresh_status()
+            self._ui_calls.put((done, ()))
+        threading.Thread(target=work, name="voice-fix", daemon=True).start()
+
     def build_voices_tab(self, nb):
         self.voices_tab = ttk.Frame(nb, padding=(4, 10, 4, 0))
         nb.add(self.voices_tab, text="Голоса")

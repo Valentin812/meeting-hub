@@ -41,6 +41,7 @@ import daily
 import ai_setup
 import updater
 import privacy
+import winsounds
 import tray as tray_mod
 import theme
 from ui_main import MainWindow
@@ -49,7 +50,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.32.0"
+APP_VERSION = "7.33.0"
 
 import support
 from support import app_dir, data_dir
@@ -376,6 +377,9 @@ class App(MainWindow):
         self.start_tray()
         import shutil
         shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
+        self.sounds_backup = here / "win_sounds_backup.json"
+        if winsounds.supported():
+            self.restore_win_sounds("После прошлого запуска звуки были отключены — возвращаю")
         self.root.after(5000, self.backfill_titles)
         self.root.after(20 * 1000, self.catch_up_transcription)
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
@@ -1175,9 +1179,44 @@ class App(MainWindow):
         self.rec_errors_seen = set()
         self._journal_note("Запись начата", reason, initiator, file=rec.stem + ".wav")
         self.last_event_text = "Запись начата. Левый канал — вы, правый — собеседники."
+        self.sounds_forced_on = False
+        if self.settings.get("mute_win_sounds", True):
+            self.mute_win_sounds()
         if self.tray is not None:
             self.tray.notify("Идёт запись встречи. Остановить: правая кнопка по значку у часов → «Остановить запись».",
                              "Meeting Hub: запись")
+        self.refresh_status()
+
+    def mute_win_sounds(self):
+        if not winsounds.supported() or winsounds.is_muted(self.sounds_backup):
+            return
+        try:
+            n = winsounds.mute(self.sounds_backup)
+        except Exception:
+            self.log.exception("Звуки Windows не отключены")
+            return
+        if n:
+            self._journal_note("Звуки Windows отключены", "На время записи, чтобы они не попали в запись", "auto")
+
+    def restore_win_sounds(self, why=""):
+        if not winsounds.supported() or not winsounds.is_muted(self.sounds_backup):
+            return
+        try:
+            n = winsounds.restore(self.sounds_backup)
+        except Exception:
+            self.log.exception("Звуки Windows не восстановлены")
+            return
+        if n:
+            self._journal_note("Звуки Windows включены", why or "Запись закончилась", "auto")
+
+    def toggle_win_sounds(self):
+        """Из меню значка: вручную включить звуки на время записи или снова отключить."""
+        if winsounds.is_muted(self.sounds_backup):
+            self.sounds_forced_on = True
+            self.restore_win_sounds("Включено вручную во время записи")
+        else:
+            self.sounds_forced_on = False
+            self.mute_win_sounds()
         self.refresh_status()
 
     def stop_recording(self, reason, initiator="auto", cut_at=None):
@@ -1186,6 +1225,7 @@ class App(MainWindow):
             return
         self.recorder = None
         self.rec_by_meeting = False
+        self.restore_win_sounds()
 
         def work():
             try:
@@ -1651,6 +1691,9 @@ class App(MainWindow):
                                       is_system_muted=lambda: bool(self.recorder and self.recorder.system_muted),
                                       on_confidential=lambda: put((self.toggle_recording_confidential, ())),
                                       is_confidential=lambda: bool(self.recorder and self.recorder.confidential),
+                                      on_sounds=(lambda: put((self.toggle_win_sounds, ())))
+                                      if winsounds.supported() else None,
+                                      sounds_muted=lambda: winsounds.is_muted(self.sounds_backup),
                                       is_recording=lambda: self.recorder is not None,
                                       elapsed=lambda: self.recorder.elapsed() if self.recorder else 0.0).start()
         except Exception:
@@ -1658,6 +1701,7 @@ class App(MainWindow):
             self.tray = None
 
     def quit_app(self):
+        self.restore_win_sounds("Программа закрыта")
         if getattr(self, "player", None) is not None:
             self.player.close()
         if self.tray is not None:
