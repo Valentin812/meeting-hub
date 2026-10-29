@@ -1,5 +1,5 @@
 ; Установщик Meeting Hub (Inno Setup 6).
-; Сборка: ISCC /DAppVer=7.29.0 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
+; Сборка: ISCC /DAppVer=7.30.0 packaging\MeetingHub.iss  (из корня репозитория, после PyInstaller)
 ; Ставится без прав администратора в %LOCALAPPDATA%\Programs\Meeting Hub.
 ; Данные пользователя лежат отдельно в %LOCALAPPDATA%\Meeting Hub и при удалении программы сохраняются.
 
