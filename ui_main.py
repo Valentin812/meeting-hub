@@ -142,7 +142,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.add_btn = ttk.Button(top, text="＋ Файл", command=self.add_files)
         self.add_btn.pack(side="right", padx=(6, 0))
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(top, textvariable=self.search_var)
+        self.search_entry = ttk.Entry(top, textvariable=self.search_var, style="Side.TEntry")
         self.search_entry.pack(side="left", fill="x", expand=True)
         self._search_placeholder(True)
         self.search_entry.bind("<FocusIn>", lambda _e: self._search_placeholder(False))

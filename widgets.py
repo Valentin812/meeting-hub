@@ -9,6 +9,16 @@ import theme
 CHIP = {"done": "ok", "text": "meet", "audio": "off", "busy": "busy", "error": "rec"}
 
 
+def _pixel_rect(canvas, x1, y1, x2, y2, step, **kw):
+    """Прямоугольник со ступенчатыми углами — для пиксельной темы."""
+    s = step
+    pts = [x1 + 2 * s, y1, x2 - 2 * s, y1, x2 - 2 * s, y1 + s, x2 - s, y1 + s, x2 - s, y1 + 2 * s, x2, y1 + 2 * s,
+           x2, y2 - 2 * s, x2 - s, y2 - 2 * s, x2 - s, y2 - s, x2 - 2 * s, y2 - s, x2 - 2 * s, y2,
+           x1 + 2 * s, y2, x1 + 2 * s, y2 - s, x1 + s, y2 - s, x1 + s, y2 - 2 * s, x1, y2 - 2 * s,
+           x1, y1 + 2 * s, x1 + s, y1 + 2 * s, x1 + s, y1 + s, x1 + 2 * s, y1 + s]
+    return canvas.create_polygon(pts, **kw)
+
+
 def _round_rect(canvas, x1, y1, x2, y2, r, **kw):
     pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
            x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
@@ -39,7 +49,10 @@ class Pill(tk.Canvas):
         w = self.font.measure(text) + 28
         self.configure(width=w)
         self.delete("all")
-        _round_rect(self, 1, 2, w - 1, 26, 12, fill=bg, outline=bg)
+        if self.pal.get("relief") == "pixel":
+            _pixel_rect(self, 1, 2, w - 1, 26, 3, fill=bg, outline=bg)
+        else:
+            _round_rect(self, 1, 2, w - 1, 26, 12, fill=bg, outline=bg)
         self.create_text(w // 2, 14, text=text, fill=fg, font=self.font)
 
     def cget_text(self):
