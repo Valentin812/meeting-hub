@@ -531,6 +531,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             m.add_command(label="Открыть расшифровку (TXT)", command=lambda: self.open_path(tr_mod.output_paths(wav)[0]))
         if self.summary_path(wav).exists():
             m.add_command(label="Сохранить задачи в CSV…", command=lambda: self.export_tasks(wav))
+        if has_text and self.crm_configured():
+            m.add_command(label="Отправить в CRM", command=lambda: self.crm_push(wav, manual=True))
         if has_text and self.settings.get("kanban_token"):
             m.add_command(label="Отправить в Канбан", command=lambda: self.kanban_push(wav, manual=True))
         if wav.exists():
@@ -1302,6 +1304,36 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             side="left", padx=(8, 0))
 
         ttk.Separator(p).pack(fill="x", pady=(14, 8))
+        ttk.Label(p, text="CRM «Этажи»", style="H2.TLabel").pack(anchor="w")
+        hint(p, "Протоколы готовых встреч уходят во вкладку «Протоколы» CRM — по тем же правилам, что и в Канбан. "
+                "Пароль хранится зашифрованным средствами Windows только на этом компьютере.")
+        c_state = tk.StringVar(value=("Подключено: " + (s.get("crm_name") or s.get("crm_login", "")))
+                               if self.crm_configured() else "Не подключено")
+        ttk.Label(p, textvariable=c_state).pack(anchor="w", padx=(28, 0))
+        cgrid = ttk.Frame(p); cgrid.pack(anchor="w", padx=(28, 0), pady=(6, 0))
+        c_url = tk.StringVar(value=s.get("crm_url", ""))
+        c_prod = tk.StringVar(value=s.get("crm_product", ""))
+        c_login = tk.StringVar(value=s.get("crm_login", ""))
+        c_pwd = tk.StringVar()
+        for r_, (lbl, var, extra) in enumerate((("Адрес CRM", c_url, {}), ("Номер проекта", c_prod, {}),
+                                                ("Логин", c_login, {}),
+                                                ("Пароль", c_pwd, {"show": "•"}))):
+            ttk.Label(cgrid, text=lbl).grid(row=r_, column=0, sticky="w", pady=2)
+            ttk.Entry(cgrid, textvariable=var, width=34, **extra).grid(row=r_, column=1, sticky="w", padx=8, pady=2)
+        ttk.Label(cgrid, text="Пароль можно не вводить, если он уже сохранён.", style="Small.TLabel").grid(
+            row=4, column=1, sticky="w", padx=8)
+        c_auto = tk.BooleanVar(value=bool(s.get("crm_auto", True)))
+        ttk.Checkbutton(p, text="Отправлять каждую готовую встречу автоматически", variable=c_auto).pack(
+            anchor="w", padx=(28, 0), pady=(6, 0))
+        crow = ttk.Frame(p); crow.pack(fill="x", padx=(28, 0), pady=(6, 0))
+        refresh_c = lambda: c_state.set(("Подключено: " + (s.get("crm_name") or s.get("crm_login", "")))
+                                        if self.crm_configured() else "Не подключено")
+        ttk.Button(crow, text="Проверить вход и сохранить", command=lambda: self.crm_check(
+            c_url.get(), c_prod.get(), c_login.get(), c_pwd.get(), win, refresh_c)).pack(side="left")
+        ttk.Button(crow, text="Отключить", command=lambda: (self.crm_disconnect(), refresh_c())).pack(
+            side="left", padx=(8, 0))
+
+        ttk.Separator(p).pack(fill="x", pady=(14, 8))
         ttk.Label(p, text="Конфиденциальность", style="H2.TLabel").pack(anchor="w")
         hint(p, "Встречи с пометкой «Конфиденциально» обрабатываются только локально: GigaChat и Канбан их не получают.")
         p_mask = tk.BooleanVar(value=bool(s.get("privacy_mask", True)))
@@ -1387,7 +1419,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
                      giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip(),
-                     kanban_auto=bool(k_auto.get()), mute_win_sounds=bool(w_snd.get()), auto_unmute_mic=bool(a_mic.get()), mute_apps=bool(m_apps.get()),
+                     kanban_auto=bool(k_auto.get()), crm_auto=bool(c_auto.get()), mute_win_sounds=bool(w_snd.get()), auto_unmute_mic=bool(a_mic.get()), mute_apps=bool(m_apps.get()),
                      mute_apps_list=m_list.get().strip() or appmute.DEFAULT_LIST, mute_apps_all=bool(m_all.get()),
                      privacy_mask=bool(p_mask.get()),
                      kanban_transcript=bool(k_text.get()), privacy_words=p_words.get().strip())

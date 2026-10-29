@@ -665,6 +665,8 @@ class App(MainWindow):
                 self.toast(notify, path)
             if self.settings.get("kanban_token") and self.settings.get("kanban_auto", True):
                 self.kanban_push(wav)
+            if self.crm_configured() and self.settings.get("crm_auto", True):
+                self.crm_push(wav)
         self.refresh_records()
         return path
 
@@ -709,6 +711,95 @@ class App(MainWindow):
                         "Канбан", "Встреча отправлена во вкладку «Встречи»." if ok else note[1], parent=self.root)
             self._ui_calls.put((done, ()))
         threading.Thread(target=work, name="kanban-push", daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # CRM «Этажи»: протоколы встреч (правила те же, что для Канбана)
+    # ------------------------------------------------------------------
+    def crm_configured(self):
+        s = self.settings
+        return bool(s.get("crm_url") and s.get("crm_login") and s.get("crm_password"))
+
+    def crm_client(self):
+        import crm_sync
+        s = self.settings
+        key = (s.get("crm_url"), s.get("crm_product"), s.get("crm_login"), s.get("crm_password"))
+        if getattr(self, "_crm_key", None) != key or getattr(self, "_crm", None) is None:
+            self._crm = crm_sync.Client(s.get("crm_url"), s.get("crm_product"), s.get("crm_login"),
+                                        crm_sync.unprotect_password(s.get("crm_password")))
+            self._crm_key = key
+        return self._crm
+
+    def crm_push(self, wav, manual=False):
+        import crm_sync
+        if not self.crm_configured():
+            return
+        if self.is_confidential(wav):
+            if manual:
+                messagebox.showinfo("CRM", "Встреча помечена как конфиденциальная и в CRM не отправляется.",
+                                    parent=self.root)
+            return
+        if not crm_sync.ready():
+            if manual:
+                messagebox.showinfo("CRM", "Загрузка протоколов в CRM ещё не настроена: нужно описание запроса "
+                                    "API протоколов. Вход в CRM можно проверить в настройках.", parent=self.root)
+            return
+        with_text = bool(self.settings.get("kanban_transcript", False))
+
+        def work():
+            try:
+                crm_sync.push(self.crm_client(), wav, with_transcript=with_text)
+                self.cloud_log.add("CRM", Path(wav).stem, "итоги, задачи и расшифровка" if with_text else "итоги и задачи")
+                note = ("Протокол отправлен в CRM", Path(wav).stem)
+            except crm_sync.CrmError as e:
+                self.cloud_log.add("CRM", Path(wav).stem, "итоги и задачи", ok=False, error=str(e))
+                note = ("CRM: протокол не отправлен", str(e))
+            except Exception as e:
+                self.log.exception("Отправка в CRM")
+                note = ("CRM: протокол не отправлен", f"{type(e).__name__}: {e}")
+            ok = note[0].startswith("Протокол")
+
+            def done():
+                self._journal_note(note[0], note[1], "user" if manual else "auto")
+                if manual:
+                    (messagebox.showinfo if ok else messagebox.showwarning)(
+                        "CRM", "Протокол отправлен во вкладку «Протоколы»." if ok else note[1], parent=self.root)
+            self._ui_calls.put((done, ()))
+        threading.Thread(target=work, name="crm-push", daemon=True).start()
+
+    def crm_check(self, url, product, login, password, parent=None, on_ok=None):
+        """Проверить вход в CRM; при успехе сохранить настройки (пароль — зашифрованным)."""
+        import crm_sync
+
+        def work():
+            try:
+                pwd = password or crm_sync.unprotect_password(self.settings.get("crm_password"))
+                who = crm_sync.Client(url, product, login, pwd).me()
+                blob = crm_sync.protect_password(pwd)
+                err = ""
+            except Exception as e:
+                who, blob, err = "", "", str(e)
+
+            def done():
+                if err:
+                    messagebox.showwarning("CRM", "Не удалось войти: " + err, parent=parent or self.root)
+                    return
+                self.settings.update(crm_url=crm_sync.normalize_url(url), crm_product=str(product).strip(),
+                                     crm_login=login.strip(), crm_password=blob, crm_name=who)
+                self._crm = None
+                self.save_settings()
+                messagebox.showinfo("CRM", f"Вход работает: {who}." + ("" if crm_sync.ready() else
+                                    " Отправка протоколов включится, когда будет описан запрос API протоколов."),
+                                    parent=parent or self.root)
+                if on_ok:
+                    on_ok()
+            self._ui_calls.put((done, ()))
+        threading.Thread(target=work, name="crm-check", daemon=True).start()
+
+    def crm_disconnect(self):
+        for key in ("crm_password", "crm_name"):
+            self.settings.pop(key, None)
+        self._crm = None
+        self.save_settings()
 
     def kanban_disconnect(self):
         for key in ("kanban_token", "kanban_email"):
