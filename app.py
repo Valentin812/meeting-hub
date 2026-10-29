@@ -49,7 +49,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.31.0"
+APP_VERSION = "7.32.0"
 
 import support
 from support import app_dir, data_dir
@@ -377,6 +377,7 @@ class App(MainWindow):
         import shutil
         shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
         self.root.after(5000, self.backfill_titles)
+        self.root.after(20 * 1000, self.catch_up_transcription)
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
         self.root.after(20 * 1000, self._update_timer)
         self.root.after(60 * 1000, lambda: updater.mark_code_good(self.data_dir))   # новый код продержался минуту
@@ -569,6 +570,56 @@ class App(MainWindow):
         """Из потока расшифровки: GigaAM не сработала, дальше — Whisper."""
         self._ui_calls.put((lambda: self._journal_note(
             "GigaAM недоступна", f"{reason}. Расшифровываю моделью Whisper.", "auto"), ()))
+
+    CATCH_UP_DAYS = 3
+
+    def catch_up_transcription(self):
+        """Свежие записи без расшифровки (восстановленные после закрытия программы, пропущенные при обновлении)
+        ставятся в очередь сами, если включена автоматическая расшифровка. Каждая запись — один раз за запуск."""
+        try:
+            if getattr(self, "_catchup_job", None) is not None:
+                self.root.after_cancel(self._catchup_job)
+            self._catchup_job = self.root.after(15 * 60 * 1000, self.catch_up_transcription)
+            if not self.auto_transcribe.get() or self.recorder is not None or self.detector.blocks_analysis:
+                return
+            if not tr_mod.LocalWhisper.available()[0]:
+                return
+            tried = self.__dict__.setdefault("_catchup_tried", set())
+            limit = time.time() - self.CATCH_UP_DAYS * 86400
+            todo = []
+            for it in rec_mod.list_recordings(self.rec_folder):
+                p = it["path"]
+                if str(p) in tried:
+                    continue
+                if tr_mod.has_transcript(p):               # расшифровка есть, итогов нет — тоже догоняем
+                    try:
+                        recent = p.with_suffix(".transcript.json").stat().st_mtime >= limit
+                    except OSError:
+                        recent = False
+                    if self.auto_summary.get() and recent and not self.summary_path(p).exists():
+                        tried.add(str(p))
+                        self.request_summary(p, automatic=True)
+                    continue
+                if it.get("audio_deleted"):
+                    continue
+                try:
+                    if p.stat().st_mtime < limit or (it.get("duration_sec") or 0) < 20:
+                        continue
+                except OSError:
+                    continue
+                todo.append(p)
+            if not todo:
+                return
+            tried.update(str(p) for p in todo)
+            q = self.transcribe_queue()
+            q.set_paused(self.detector.blocks_analysis)
+            added = [p for p in todo if q.add(p)]
+            if added:
+                self._journal_note("Расшифровка поставлена в очередь", f"Записи без расшифровки: {len(added)}", "auto")
+                self.refresh_records()
+                self.refresh_status()
+        except Exception:
+            self.log.exception("Догоняющая расшифровка")
 
     def transcribe_files(self, paths, force=False):
         ok, why = tr_mod.LocalWhisper.available()
@@ -1198,6 +1249,7 @@ class App(MainWindow):
                 self._journal_note("Запись восстановлена",
                                    f"После неожиданного закрытия программы сведены записи: {names}")
                 self.refresh_records()
+                self.catch_up_transcription()
             self._ui_calls.put((done, ()))
 
     # ------------------------------------------------------------------

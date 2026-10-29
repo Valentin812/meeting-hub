@@ -8,6 +8,9 @@
 import math
 
 
+_ALIVE = []        # PhotoImage удаляется вместе с объектом — держим ссылки на уровне модуля
+
+
 def _rgb(c):
     c = c.lstrip("#")
     return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
@@ -315,5 +318,5 @@ def install(root, st, pal):
             st.map("TNotebook.Tab", foreground=[("selected", accent), ("active", pal["text"])])
     except Exception:
         pass
-    st._modern_images = keep                       # картинки должны жить, пока жива тема
+    _ALIVE.extend(keep)           # картинки должны жить всё время работы: иначе элементы рисуются пустыми
     return done
