@@ -149,6 +149,15 @@ def underline_tab_rows(w, h, bg, base, accent=None, thick=3):
     return rows
 
 
+def segment_rows(w, h, inset, r, fill, border, track):
+    """Сегмент переключателя: фон-дорожка и скруглённая плашка внутри с отступом inset."""
+    rows = [[track] * w for _ in range(h)]
+    inner = rounded_rows(w - 2 * inset, h - 2 * inset, r, fill, border, track)
+    for y in range(h - 2 * inset):
+        rows[y + inset][inset:w - inset] = inner[y]
+    return rows
+
+
 def thumb_rows(w, h, margin, color, bg, pixel=False):
     """Бегунок прокрутки: тонкая «таблетка» по центру полосы (в пикселе — квадратный блок с рамкой)."""
     rows = [[bg] * w for _ in range(h)]
@@ -231,7 +240,10 @@ def install(root, st, pal):
 
     box = pixel_rows if pixel else rounded_rows
     bwid = 2 * px(1) if pixel else 1.0
-    r, bh, bw_ = (px(3) if pixel else px(9)), px(36), px(36)
+    mac = "sidebar" in pal and not pixel       # Mac-темы: свои кнопки и вкладки-переключатель
+    # r — и радиус, и неизменяемая рамка картинки: всё, что не однотонно, должно попасть в рамку,
+    # иначе середина повторяется «плиткой». У пикселя углы и нижняя грань занимают 3 крупных пикселя.
+    r, bh, bw_ = (px(9) if pixel else px(6) if mac else px(9)), px(36), px(36)
     # кнопки
     def button(prefix, fill, border, hover, press, off):
         return element(prefix, img(box(bw_, bh, r, fill, border, bg, bwid, bevel=pixel)),
@@ -254,7 +266,7 @@ def install(root, st, pal):
 
     # поля ввода; для поля на боковой панели (Side.TEntry) углы закрашены цветом панели
     if True:
-        fh, fr = px(34), (px(3) if pixel else px(8))
+        fh, fr = px(34), (px(9) if pixel else px(6) if mac else px(8))
         fbw = 2 * px(1) if pixel else 1.0
 
         def field(name, corner):
@@ -278,7 +290,7 @@ def install(root, st, pal):
     # галочки и переключатели
     cs = px(18)
     mark = pal["accent_fg"]
-    ck = lambda on, f, b: img(check_rows(cs, on, f, b, bg, mark, box=box))
+    ck = lambda on, f, b: img(check_rows(cs, on, f, b, bg, mark, radius=px(4) if mac else None, box=box))
     element(P + "check", ck(False, sf, pal["faint"]), ("disabled", ck(False, bg, br)),
             ("selected", "active", ck(True, ahov, ahov)), ("selected", ck(True, accent, accent)),
             ("active", ck(False, sf, accent)), sticky="")
@@ -299,7 +311,12 @@ def install(root, st, pal):
     if pixel:
         pt = lambda fill: img(pixel_tab_rows(px(30), th, px(3), fill, br, bg, 2 * px(1)))
         element(P + "tab", pt(pal["btn"]), ("selected", pt(accent)), ("active", pt(pal["hover"])),
-                border=(px(5), px(5), px(5), px(2)), sticky="nswe", padding=(0, 0, 0, 0))
+                border=(px(9), px(9), px(9), px(1)), sticky="nswe", padding=(0, 0, 0, 0))
+    elif mac:                                    # как переключатель в macOS: выбранная — белая «таблетка»
+        track = pal["hover"]
+        seg = lambda fill, edge: img(segment_rows(px(30), px(32), px(2), px(7), fill, edge, track))
+        element(P + "tab", seg(track, track), ("selected", seg(sf, br)), ("active", seg(mix(track, sf, 0.5), track)),
+                border=(px(10), px(10), px(10), px(10)), sticky="nswe", padding=(0, 0, 0, 0))
     else:
         element(P + "tab", img(underline_tab_rows(px(30), th, bg, br)),
                 ("selected", img(underline_tab_rows(px(30), th, bg, br, accent, px(3)))),
@@ -331,7 +348,8 @@ def install(root, st, pal):
         if pixel:
             st.map("TNotebook.Tab", foreground=[("selected", pal["accent_fg"]), ("active", pal["text"])])
         else:
-            st.map("TNotebook.Tab", foreground=[("selected", accent), ("active", pal["text"])])
+            st.map("TNotebook.Tab", foreground=[("selected", pal["text"] if mac else accent),
+                                                ("active", pal["text"])])
     except Exception:
         pass
     _ALIVE.extend(keep)           # картинки должны жить всё время работы: иначе элементы рисуются пустыми

@@ -105,8 +105,9 @@ class VoicesUI:
         text = self.tr_text
         try:
             first, last = text.index("sel.first"), text.index("sel.last")
-        except tk.TclError:
-            return []
+        except tk.TclError:                                # выделения нет — берём реплику, по которой щёлкнули
+            last_seg = getattr(self, "_last_seg", None)
+            return [last_seg] if last_seg is not None and last_seg < len(getattr(self, "_segments", [])) else []
         hit = []
         for i, (_s, _e, tag) in enumerate(getattr(self, "_segments", [])):
             ranges = text.tag_ranges(tag)
@@ -121,8 +122,9 @@ class VoicesUI:
         wav = Path(wav)
         idx = self.selected_segments()
         if not idx:
-            messagebox.showinfo("Голоса", "Сначала выделите мышью реплики, у которых неверно определён голос "
-                                "(можно несколько).", parent=self.root)
+            messagebox.showinfo("Голоса", "Щёлкните по реплике с неверным голосом (или выделите мышью несколько "
+                                "реплик) и нажмите кнопку ещё раз. Можно и правой кнопкой мыши по реплике.",
+                                parent=self.root)
             return
         if not wav.exists():
             messagebox.showinfo("Голоса", "Аудио удалено — по звуку голос не запомнить.", parent=self.root)
