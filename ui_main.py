@@ -1242,11 +1242,11 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         ttk.Combobox(grid, textvariable=lang, values=["ru", "en", "auto"], state="readonly",
                      width=12).grid(row=2, column=1, sticky="w", padx=10, pady=(12, 4))
         ttk.Label(grid, text="Модель для итогов (Ollama)").grid(row=5, column=0, sticky="w", pady=(12, 4))
-        ttk.Entry(grid, textvariable=llm, width=18).grid(row=5, column=1, sticky="w", padx=10, pady=(12, 4))
-        ttk.Button(grid, text="Проверить", command=lambda: self.check_ollama(llm.get())).grid(
-            row=5, column=2, sticky="w", pady=(12, 4))
-        ttk.Button(grid, text="Установить ИИ…", command=self.open_ai_setup).grid(
-            row=5, column=3, sticky="w", padx=(8, 0), pady=(12, 4))
+        orow = ttk.Frame(grid)                    # поле и кнопки рядом, в одной ячейке — не уезжают вправо
+        orow.grid(row=5, column=1, sticky="w", padx=10, pady=(12, 4))
+        ttk.Entry(orow, textvariable=llm, width=18).pack(side="left")
+        ttk.Button(orow, text="Проверить", command=lambda: self.check_ollama(llm.get())).pack(side="left", padx=(8, 0))
+        ttk.Button(orow, text="Установить ИИ…", command=self.open_ai_setup).pack(side="left", padx=(8, 0))
         voices_on = tk.BooleanVar(value=self.voices_wanted())
         vrow = ttk.Frame(p); vrow.pack(anchor="w", pady=(14, 0))
         ttk.Checkbutton(vrow, text="Определять, кто говорит (по голосу)", variable=voices_on).pack(side="left")
