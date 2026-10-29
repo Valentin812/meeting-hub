@@ -226,6 +226,13 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.task_tree.pack(fill="both", expand=True)
         self.tasks_tab = tasks
         self.tr_text = self._text_tab(self.detail_nb, "Расшифровка")
+        fix_bar = ttk.Frame(self.tr_text.master)
+        fix_bar.pack(side="bottom", fill="x", before=self.tr_text, pady=(0, 6))
+        ttk.Label(fix_bar, text="Неверно определён голос? Выделите реплики мышью →", style="Small.TLabel").pack(
+            side="left")
+        ttk.Button(fix_bar, text="Исправить голос у выделенного…", command=self.fix_selected_voice).pack(
+            side="left", padx=(8, 0))
+        self.tr_text.bind("<Button-3>", self._transcript_menu)
         self.build_voices_tab(self.detail_nb)
         self.build_chat_tab(self.detail_nb)
 
@@ -587,6 +594,15 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                                                         t.get("deadline") or "—"))
         self.detail_nb.tab(self.tasks_tab, text=f"Задачи  {len(tasks)}" if tasks else "Задачи")
 
+    def _transcript_menu(self, event):
+        """Правая кнопка по расшифровке: исправить голос у выделенных реплик."""
+        menu = tk.Menu(self.tr_text, tearoff=False)
+        menu.add_command(label="Исправить голос у выделенного…", command=self.fix_selected_voice)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
     def _render_transcript(self, wav):
         data = read_json(tr_mod.output_paths(wav)[1]) or {}
         segs = data.get("segments") or []
@@ -609,7 +625,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self._write(text, out)
         if wav.exists():
             for start, _end, tag in self._segments:
-                text.tag_bind(tag, "<Button-1>", lambda _e, t=start: self.play_from(t))
+                text.tag_bind(tag, "<ButtonRelease-1>",
+                              lambda _e, t=start: None if text.tag_ranges("sel") else self.play_from(t))
                 text.tag_bind(tag, "<Enter>", lambda _e: text.configure(cursor="hand2"))
                 text.tag_bind(tag, "<Leave>", lambda _e: text.configure(cursor=""))
             self._now_tag = None
@@ -1168,6 +1185,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             "Программа покажет, слышны ли вы и собеседники.")).pack(anchor="w")
         self.test_btn = ttk.Button(p, text="Проверить запись", style="Accent.TButton", command=self.test_recording)
         self.test_btn.pack(anchor="w", pady=(8, 16))
+        w_snd = tk.BooleanVar(value=bool(s.get("mute_win_sounds", True)))
+        ttk.Checkbutton(p, text="Отключать звуки Windows на время записи", variable=w_snd).pack(anchor="w")
+        hint(p, "Сообщения и «дзынь» уведомлений Windows не попадут в запись. После записи звуки возвращаются. "
+                "Включить их раньше можно в меню значка у часов. Звуки мессенджеров и браузера это не отключает.")
         heading(p, "Если запись не работает")
         for text, cmd in (("Мастер настройки", self.open_first_run),
                           ("Подробная проверка звука", self.full_audio_check),
@@ -1343,7 +1364,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                      auto_summary=self.auto_summary.get(), auto_detect=self.auto_detect.get(),
                      auto_pause=self.auto_pause.get(), voices_enabled=bool(voices_on.get()),
                      giga_enabled=bool(g_on.get()), giga_code=g_code.get().strip(),
-                     kanban_auto=bool(k_auto.get()), privacy_mask=bool(p_mask.get()),
+                     kanban_auto=bool(k_auto.get()), mute_win_sounds=bool(w_snd.get()), privacy_mask=bool(p_mask.get()),
                      kanban_transcript=bool(k_text.get()), privacy_words=p_words.get().strip())
             for old_key in ("salute_enabled", "salute_key", "salute_scope", "salute_insecure"):
                 s.pop(old_key, None)                      # SaluteSpeech из программы убран

@@ -402,6 +402,52 @@ def name_voice(wav, cluster_id, name, profiles):
     return sp
 
 
+def reassign_segments(wav, indexes, name, embedder, profiles):
+    """Пользователь выделил реплики и сказал, кто это на самом деле: подписи меняются, а голос по этим
+    репликам идёт в обучение (запоминается за этим человеком). Возвращает данные speakers.json."""
+    wav = Path(wav)
+    name = (name or "").strip()
+    if not name:
+        raise VoicesError("впишите имя")
+    js = tr.output_paths(wav)[1]
+    segs = json.loads(js.read_text(encoding="utf-8")).get("segments") or []
+    idx = sorted({int(i) for i in indexes if 0 <= int(i) < len(segs)})
+    if not idx:
+        raise VoicesError("не выбрано ни одной реплики")
+    if not wav.exists():
+        raise VoicesError("аудио удалено — по звуку голос не запомнить")
+    audio = _other_audio(wav)
+    vecs, seconds = [], 0.0
+    for i in idx:
+        s = segs[i]
+        seconds += max(0.0, float(s.get("end", 0)) - float(s.get("start", 0)))
+        for a, b in _windows(s):
+            v = embedder.embed(audio[int(a * RATE):int(b * RATE)])
+            if v is not None:
+                vecs.append(v)
+    if not vecs:
+        raise VoicesError("выбранные реплики слишком короткие, чтобы запомнить голос")
+    cent = _unit(np.mean(vecs, axis=0))
+    sp = read_speakers(wav) or {"model": MODEL_NAME, "clusters": [], "assign": {}, "speakers": 0}
+    cluster = next((c for c in sp["clusters"] if (c.get("name") or "").strip() == name), None)
+    if cluster is None:
+        cluster = {"id": max([c["id"] for c in sp["clusters"]] or [0]) + 1, "name": name, "auto": False,
+                   "score": 1.0, "seconds": 0.0, "clips": [], "centroid": [round(float(x), 5) for x in cent]}
+        sp["clusters"].append(cluster)
+    cluster["seconds"] = round(float(cluster.get("seconds", 0)) + seconds, 1)
+    for i in idx[:CLIPS]:
+        a, b = float(segs[i].get("start", 0)), float(segs[i].get("end", 0))
+        cluster["clips"] = (cluster.get("clips") or [])[:CLIPS - 1] + [
+            {"start": round(a, 2), "end": round(min(b, a + CLIP_SEC), 2)}]
+    for i in idx:
+        sp["assign"][str(i)] = cluster["id"]
+    profiles.learn(name, [cent])
+    profiles.save()
+    _write_json(speakers_path(wav), sp)
+    apply_names(wav)
+    return sp
+
+
 def confirm_voice(wav, cluster_id, profiles):
     """Пользователь подтвердил, что голос узнан верно: отпечаток этой встречи тоже идёт в обучение."""
     sp = read_speakers(wav)
