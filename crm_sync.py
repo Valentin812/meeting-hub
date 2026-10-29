@@ -135,7 +135,9 @@ class Client:
             return _request(method, self.base + path, body, headers, opener=self.opener)
 
     def me(self):
-        return self.info()[0]
+        data = self.call("GET", "/api/me")
+        user = data.get("operator") or data.get("user") or data
+        return user.get("name") or user.get("login") or user.get("email") or "вход выполнен"
 
     def info(self):
         """(имя, проект_по_умолчанию, [(id, название)]) — проект подставляется сам, вводить номер не нужно."""
