@@ -181,7 +181,19 @@ def to_data(rows):
     return " ".join("{" + " ".join(row) + "}" for row in rows)
 
 
+STYLES = ("TButton", "Accent.TButton", "TMenubutton", "TEntry", "Side.TEntry", "TCombobox", "TCheckbutton",
+          "TRadiobutton", "TNotebook.Tab", "Vertical.TScrollbar", "Horizontal.TScrollbar")
+
+
 def reset(st):
+    """Вернуть стандартные раскладки. Исходные снимаются один раз, до первой замены: иначе «исходной»
+    у Accent.TButton оказалась бы уже заменённая раскладка TButton с картинками прошлой темы."""
+    if not _ORIG:
+        for name in STYLES:
+            try:
+                _ORIG[name] = st.layout(name)
+            except Exception:
+                pass
     for name, spec in _ORIG.items():
         try:
             st.layout(name, spec)
@@ -232,8 +244,6 @@ def install(root, st, pal):
     def layout(name, spec, needs):
         if all(n in done for n in needs):
             try:
-                if name not in _ORIG:
-                    _ORIG[name] = st.layout(name)
                 st.layout(name, spec)
             except Exception:
                 pass

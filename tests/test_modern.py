@@ -33,6 +33,25 @@ class ModernTests(unittest.TestCase):
     def test_images_kept_at_module_level(self):
         self.assertIsInstance(modern._ALIVE, list)      # иначе PhotoImage удаляются и элементы рисуются пустыми
 
+    def test_originals_taken_before_any_change(self):
+        class FakeStyle:
+            def __init__(self):
+                self.layouts = {"TButton": ["orig-button"]}
+
+            def layout(self, name, spec=None):
+                if spec is None:
+                    return self.layouts.get(name, self.layouts["TButton"])   # как в Tk: без своей — от TButton
+                self.layouts[name] = spec
+        st = FakeStyle()
+        modern._ORIG.clear()
+        modern.reset(st)
+        st.layout("TButton", ["modern"])
+        st.layout("Accent.TButton", ["modern-accent"])
+        modern.reset(st)                                # смена темы на Windows 95
+        self.assertEqual(st.layouts["Accent.TButton"], ["orig-button"])
+        self.assertEqual(st.layouts["TButton"], ["orig-button"])
+        modern._ORIG.clear()
+
     def test_retro_themes_untouched(self):
         class Boom:
             def __getattr__(self, _n):
