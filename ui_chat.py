@@ -24,9 +24,6 @@ class ChatUI:
         self.chat_log.config(state="disabled")
         self.chat_log.pack(fill="both", expand=True)
         self.chat_tags()
-        opts = ttk.Frame(tab)
-        opts.pack(fill="x", pady=(6, 0))
-        ttk.Button(opts, text="Очистить", command=self.chat_clear).pack(side="right")
         row = ttk.Frame(tab)
         row.pack(fill="x", pady=(6, 0))
         self.chat_var = tk.StringVar()
@@ -35,6 +32,7 @@ class ChatUI:
         self.chat_entry.bind("<Return>", lambda _e: self.chat_send())
         self.chat_btn = ttk.Button(row, text="Спросить", style="Accent.TButton", command=self.chat_send)
         self.chat_btn.pack(side="left", padx=(6, 0))
+        ttk.Button(row, text="Очистить", command=self.chat_clear).pack(side="left", padx=(6, 0))
         self.chat_note = ttk.Label(tab, style="Small.TLabel", wraplength=560, justify="left",
                                    text=self.chat_note_text())
         self.chat_note.pack(anchor="w", pady=(4, 0))
