@@ -76,14 +76,14 @@ class VoicesTests(unittest.TestCase):
         self.assertEqual(len(sp["clusters"]), 2)
         self.assertTrue(all(len(c["clips"]) >= 1 for c in sp["clusters"]))
         segs = json.loads(tr.output_paths(wav)[1].read_text(encoding="utf-8"))["segments"]
-        self.assertEqual({s["speaker"] for s in segs}, {"Голос 1", "Голос 2"})
+        self.assertEqual({s["speaker"] for s in segs}, {"Собеседник"})      # не узнаны — просто «Собеседник»
         self.assertEqual(segs[0]["speaker"], segs[2]["speaker"])
         # пользователь называет первый голос
         cid = int(sp["assign"]["0"])
         voices.name_voice(wav, cid, "Иван", self.profiles)
         txt = tr.output_paths(wav)[0].read_text(encoding="utf-8")
         self.assertIn("Иван:", txt)
-        self.assertIn("Голос", txt)
+        self.assertIn("Собеседник", txt)
         segs = json.loads(tr.output_paths(wav)[1].read_text(encoding="utf-8"))["segments"]
         self.assertEqual(segs[0]["speaker"], "Иван")
         self.assertEqual(segs[0]["speaker_raw"], "Участники")
@@ -102,7 +102,7 @@ class VoicesTests(unittest.TestCase):
         self.assertEqual(names, ["", "", "Иван"])
         segs = json.loads(tr.output_paths(w2)[1].read_text(encoding="utf-8"))["segments"]
         self.assertEqual(segs[1]["speaker"], "Иван")
-        self.assertTrue(segs[0]["speaker"].startswith("Голос"))
+        self.assertEqual(segs[0]["speaker"], "Собеседник")
 
     def test_rematch_after_new_person_learned(self):
         w1 = make_meeting(self.tmp / "r1", [("A", 8), ("B", 8)])
@@ -149,6 +149,34 @@ class VoicesTests(unittest.TestCase):
         voices.reassign_segments(wav, seg, "Ольга", FakeEmbedder(), self.profiles)
         ivan = next(c for c in voices.read_speakers(wav)["clusters"] if c["id"] == a_id)
         self.assertNotIn(clip["start"], [c["start"] for c in ivan["clips"]])
+
+    def test_unsure_match_is_only_a_guess(self):
+        p = voices.Profiles(self.tmp / "v2.json")
+        a = np.zeros(16, dtype=np.float32); a[0] = 1.0
+        b = np.zeros(16, dtype=np.float32); b[0], b[1] = 0.65, 0.76         # похож на «Глеба», но не очень (0.65)
+        p.learn("Глеб", [a])
+        self.assertEqual(p.judge(a), ("Глеб", "", 1.0))
+        name, guess, score = p.judge(b)
+        self.assertEqual((name, guess), ("", "Глеб"))                      # только предположение
+        p.learn("Ольга", [b])
+        c = np.zeros(16, dtype=np.float32); c[0], c[1] = 0.95, 0.31        # близок к обоим — отрыв мал
+        c /= np.linalg.norm(c)
+        name, guess, _ = p.judge(c)
+        self.assertEqual(name, "")
+        self.assertTrue(guess)
+
+    def test_demote_old_unsure_names(self):
+        wav = make_meeting(self.tmp / "dm", [("A", 6), ("B", 7)])
+        voices.analyze(wav, FakeEmbedder(), self.profiles)
+        sp = voices.read_speakers(wav)
+        sp["clusters"][0].update(name="Глеб", auto=True, score=0.62)       # старая версия подставила наугад
+        sp["clusters"][1].update(name="Анна", auto=False, score=0.5)       # подтверждено вами — не трогаем
+        voices._write_json(voices.speakers_path(wav), sp)
+        self.assertTrue(voices.demote_unsure(wav))
+        sp = voices.read_speakers(wav)
+        self.assertEqual((sp["clusters"][0]["name"], sp["clusters"][0]["guess"]), ("", "Глеб"))
+        self.assertEqual(sp["clusters"][1]["name"], "Анна")
+        self.assertFalse(voices.demote_unsure(wav))
 
     def test_confirm_auto_voice_adds_training(self):
         w1 = make_meeting(self.tmp / "c1", [("A", 8), ("B", 8)])

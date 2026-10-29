@@ -385,6 +385,7 @@ class App(MainWindow):
             self.restore_win_sounds("После прошлого запуска звуки были отключены — возвращаю")
             threading.Thread(target=lambda: appmute.restore_backup(self.apps_backup, self.log), daemon=True).start()
         self.root.after(5000, self.backfill_titles)
+        self.root.after(8000, self.demote_unsure_voices)
         self.root.after(20 * 1000, self.catch_up_transcription)
         self.root.after(10 * 60 * 1000, self.housekeeping)                # хранение: через 10 мин после старта
         self.root.after(20 * 1000, self._update_timer)
@@ -946,6 +947,31 @@ class App(MainWindow):
             self.last_event_text = f"Расшифровка не удалась: {st['error'][:150]}"
         self.refresh_records()
         self.refresh_status()
+
+    def demote_unsure_voices(self):
+        """Один раз: имена голосов, подставленные прошлыми версиями без уверенности, становятся предположениями."""
+        if self.settings.get("voices_unsure_fixed"):
+            return
+
+        def work():
+            import voices
+            n = 0
+            for sp in Path(self.rec_folder).glob("*.speakers.json"):
+                try:
+                    n += voices.demote_unsure(sp.with_name(sp.name[:-len(".speakers.json")] + ".wav"))
+                except Exception:
+                    self.log.exception("Голоса: %s", sp.name)
+            self.settings["voices_unsure_fixed"] = True
+
+            def done():
+                self.save_settings()
+                if n:
+                    self._journal_note("Голоса уточнены", f"Неуверенные подписи сняты во встречах: {n}", "auto")
+                    self.refresh_records()
+                    if self.selected is not None:
+                        self.show_meeting(self.selected, force=True)
+            self._ui_calls.put((done, ()))
+        threading.Thread(target=work, daemon=True).start()
 
     def backfill_titles(self):
         """Один раз: дать названия старым записям без названия (ничего не удаляется, ручные названия целы)."""
