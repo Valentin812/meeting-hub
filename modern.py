@@ -8,6 +8,8 @@
 import math
 
 
+_ORIG = {}         # исходные раскладки элементов ttk: к ним возвращаемся при смене темы
+_COUNT = 0
 _ALIVE = []        # PhotoImage удаляется вместе с объектом — держим ссылки на уровне модуля
 
 
@@ -147,6 +149,15 @@ def underline_tab_rows(w, h, bg, base, accent=None, thick=3):
     return rows
 
 
+def segment_rows(w, h, inset, r, fill, border, track):
+    """Сегмент переключателя: фон-дорожка и скруглённая плашка внутри с отступом inset."""
+    rows = [[track] * w for _ in range(h)]
+    inner = rounded_rows(w - 2 * inset, h - 2 * inset, r, fill, border, track)
+    for y in range(h - 2 * inset):
+        rows[y + inset][inset:w - inset] = inner[y]
+    return rows
+
+
 def thumb_rows(w, h, margin, color, bg, pixel=False):
     """Бегунок прокрутки: тонкая «таблетка» по центру полосы (в пикселе — квадратный блок с рамкой)."""
     rows = [[bg] * w for _ in range(h)]
@@ -170,14 +181,26 @@ def to_data(rows):
     return " ".join("{" + " ".join(row) + "}" for row in rows)
 
 
+def reset(st):
+    for name, spec in _ORIG.items():
+        try:
+            st.layout(name, spec)
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Подключение к ttk
 # ---------------------------------------------------------------------------
 def install(root, st, pal):
     """Скруглённые элементы для «плоских» тем. Возвращает список подключённых элементов."""
+    reset(st)                                    # вернуть стандартную раскладку: тема могла смениться «на лету»
     kind = pal.get("relief")
     if kind not in ("flat", "pixel"):
         return []
+    global _COUNT
+    _COUNT += 1
+    P = "Mod%d." % _COUNT                        # у каждой темы свои имена элементов: старые не мешают новым
     pixel = kind == "pixel"
     import tkinter as tk
     try:
@@ -209,13 +232,18 @@ def install(root, st, pal):
     def layout(name, spec, needs):
         if all(n in done for n in needs):
             try:
+                if name not in _ORIG:
+                    _ORIG[name] = st.layout(name)
                 st.layout(name, spec)
             except Exception:
                 pass
 
     box = pixel_rows if pixel else rounded_rows
     bwid = 2 * px(1) if pixel else 1.0
-    r, bh, bw_ = (px(3) if pixel else px(9)), px(36), px(36)
+    mac = "sidebar" in pal and not pixel       # Mac-темы: свои кнопки и вкладки-переключатель
+    # r — и радиус, и неизменяемая рамка картинки: всё, что не однотонно, должно попасть в рамку,
+    # иначе середина повторяется «плиткой». У пикселя углы и нижняя грань занимают 3 крупных пикселя.
+    r, bh, bw_ = (px(9) if pixel else px(6) if mac else px(9)), px(36), px(36)
     # кнопки
     def button(prefix, fill, border, hover, press, off):
         return element(prefix, img(box(bw_, bh, r, fill, border, bg, bwid, bevel=pixel)),
@@ -223,22 +251,22 @@ def install(root, st, pal):
                        ("pressed", img(box(bw_, bh, r, press, border, bg, bwid))),
                        ("active", img(box(bw_, bh, r, hover, border, bg, bwid, bevel=pixel))),
                        border=(r, r, r, r), sticky="nswe", padding=(r // 2, 2, r // 2, 2))
-    button("Modern.Button.border", pal["btn"], br, pal["hover"], mix(pal["hover"], br, 0.6), bg)
-    button("Modern.Accent.border", accent, accent, ahov, mix(ahov, "#000000", 0.15), pal["hover"])
-    body = lambda ctrl: [("Modern.%s.border" % ctrl, {"sticky": "nswe", "children": [
+    button(P + "Button.border", pal["btn"], br, pal["hover"], mix(pal["hover"], br, 0.6), bg)
+    button(P + "Accent.border", accent, accent, ahov, mix(ahov, "#000000", 0.15), pal["hover"])
+    body = lambda ctrl: [(P + "%s.border" % ctrl, {"sticky": "nswe", "children": [
         ("Button.focus", {"sticky": "nswe", "children": [
             ("Button.padding", {"sticky": "nswe", "children": [("Button.label", {"sticky": "nswe"})]})]})]})]
-    layout("TButton", body("Button"), ["Modern.Button.border"])
-    layout("Accent.TButton", body("Accent"), ["Modern.Accent.border"])
-    layout("TMenubutton", [("Modern.Button.border", {"sticky": "nswe", "children": [
+    layout("TButton", body("Button"), [P + "Button.border"])
+    layout("Accent.TButton", body("Accent"), [P + "Accent.border"])
+    layout("TMenubutton", [(P + "Button.border", {"sticky": "nswe", "children": [
         ("Menubutton.focus", {"sticky": "nswe", "children": [
             ("Menubutton.indicator", {"side": "right", "sticky": ""}),
             ("Menubutton.padding", {"expand": "1", "sticky": "we", "children": [
-                ("Menubutton.label", {"side": "left", "sticky": ""})]})]})]})], ["Modern.Button.border"])
+                ("Menubutton.label", {"side": "left", "sticky": ""})]})]})]})], [P + "Button.border"])
 
     # поля ввода; для поля на боковой панели (Side.TEntry) углы закрашены цветом панели
     if True:
-        fh, fr = px(34), (px(3) if pixel else px(8))
+        fh, fr = px(34), (px(9) if pixel else px(6) if mac else px(8))
         fbw = 2 * px(1) if pixel else 1.0
 
         def field(name, corner):
@@ -246,53 +274,58 @@ def install(root, st, pal):
                     ("focus", img(box(px(34), fh, fr, sf, accent, corner, 2 * px(1) if pixel else px(1.5)))),
                     ("disabled", img(box(px(34), fh, fr, bg, br, corner, fbw))),
                     border=(fr, fr, fr, fr), sticky="nswe", padding=(px(6), px(2), px(6), px(2)))
-        field("Modern.Entry.field", bg)
+        field(P + "Entry.field", bg)
         side = pal.get("sidebar", bg)
-        field("Modern.SideEntry.field", side)
-        for style_name, fld in (("TEntry", "Modern.Entry.field"), ("Side.TEntry", "Modern.SideEntry.field")):
+        field(P + "SideEntry.field", side)
+        for style_name, fld in (("TEntry", P + "Entry.field"), ("Side.TEntry", P + "SideEntry.field")):
             layout(style_name, [(fld, {"sticky": "nswe", "children": [
                 ("Entry.padding", {"sticky": "nswe", "children": [("Entry.textarea", {"sticky": "nswe"})]})]})],
                    [fld])
-        element("Modern.Chevron", img(chevron_rows(px(18), px(16), sf, pal["muted"], pixel)))
-        layout("TCombobox", [("Modern.Entry.field", {"sticky": "nswe", "children": [
-            ("Modern.Chevron", {"side": "right", "sticky": ""}),
+        element(P + "Chevron", img(chevron_rows(px(18), px(16), sf, pal["muted"], pixel)))
+        layout("TCombobox", [(P + "Entry.field", {"sticky": "nswe", "children": [
+            (P + "Chevron", {"side": "right", "sticky": ""}),
             ("Combobox.padding", {"expand": "1", "sticky": "nswe", "children": [
-                ("Combobox.textarea", {"sticky": "nswe"})]})]})], ["Modern.Entry.field", "Modern.Chevron"])
+                ("Combobox.textarea", {"sticky": "nswe"})]})]})], [P + "Entry.field", P + "Chevron"])
 
     # галочки и переключатели
     cs = px(18)
     mark = pal["accent_fg"]
-    ck = lambda on, f, b: img(check_rows(cs, on, f, b, bg, mark, box=box))
-    element("Modern.check", ck(False, sf, pal["faint"]), ("disabled", ck(False, bg, br)),
+    ck = lambda on, f, b: img(check_rows(cs, on, f, b, bg, mark, radius=px(4) if mac else None, box=box))
+    element(P + "check", ck(False, sf, pal["faint"]), ("disabled", ck(False, bg, br)),
             ("selected", "active", ck(True, ahov, ahov)), ("selected", ck(True, accent, accent)),
             ("active", ck(False, sf, accent)), sticky="")
     layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
-        ("Modern.check", {"side": "left", "sticky": ""}),
+        (P + "check", {"side": "left", "sticky": ""}),
         ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
-            ("Checkbutton.label", {"sticky": "nswe"})]})]})], ["Modern.check"])
-    element("Modern.radio", img(radio_rows(cs, False, sf, pal["faint"], bg, accent, pixel)),
+            ("Checkbutton.label", {"sticky": "nswe"})]})]})], [P + "check"])
+    element(P + "radio", img(radio_rows(cs, False, sf, pal["faint"], bg, accent, pixel)),
             ("selected", img(radio_rows(cs, True, sf, accent, bg, accent, pixel))),
             ("active", img(radio_rows(cs, False, sf, accent, bg, accent, pixel))), sticky="")
     layout("TRadiobutton", [("Radiobutton.padding", {"sticky": "nswe", "children": [
-        ("Modern.radio", {"side": "left", "sticky": ""}),
+        (P + "radio", {"side": "left", "sticky": ""}),
         ("Radiobutton.focus", {"side": "left", "sticky": "w", "children": [
-            ("Radiobutton.label", {"sticky": "nswe"})]})]})], ["Modern.radio"])
+            ("Radiobutton.label", {"sticky": "nswe"})]})]})], [P + "radio"])
 
     # вкладки: линия снизу, у выбранной — акцентная
     th = px(38)
     if pixel:
         pt = lambda fill: img(pixel_tab_rows(px(30), th, px(3), fill, br, bg, 2 * px(1)))
-        element("Modern.tab", pt(pal["btn"]), ("selected", pt(accent)), ("active", pt(pal["hover"])),
-                border=(px(5), px(5), px(5), px(2)), sticky="nswe", padding=(0, 0, 0, 0))
+        element(P + "tab", pt(pal["btn"]), ("selected", pt(accent)), ("active", pt(pal["hover"])),
+                border=(px(9), px(9), px(9), px(1)), sticky="nswe", padding=(0, 0, 0, 0))
+    elif mac:                                    # как переключатель в macOS: выбранная — белая «таблетка»
+        track = pal["hover"]
+        seg = lambda fill, edge: img(segment_rows(px(30), px(32), px(2), px(7), fill, edge, track))
+        element(P + "tab", seg(track, track), ("selected", seg(sf, br)), ("active", seg(mix(track, sf, 0.5), track)),
+                border=(px(10), px(10), px(10), px(10)), sticky="nswe", padding=(0, 0, 0, 0))
     else:
-        element("Modern.tab", img(underline_tab_rows(px(30), th, bg, br)),
+        element(P + "tab", img(underline_tab_rows(px(30), th, bg, br)),
                 ("selected", img(underline_tab_rows(px(30), th, bg, br, accent, px(3)))),
                 ("active", img(underline_tab_rows(px(30), th, pal["hover"], br))),
                 border=(px(4), px(4), px(4), px(4)), sticky="nswe", padding=(0, 0, 0, 0))
-    layout("TNotebook.Tab", [("Modern.tab", {"sticky": "nswe", "children": [
+    layout("TNotebook.Tab", [(P + "tab", {"sticky": "nswe", "children": [
         ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
             ("Notebook.focus", {"side": "top", "sticky": "nswe", "children": [
-                ("Notebook.label", {"side": "top", "sticky": ""})]})]})]})], ["Modern.tab"])
+                ("Notebook.label", {"side": "top", "sticky": ""})]})]})]})], [P + "tab"])
 
     # прокрутка: тонкий бегунок без стрелок
     sw, sh, sm = px(14), px(28), px(4)
@@ -302,7 +335,7 @@ def install(root, st, pal):
         if not vert:
             rows_n = [list(c) for c in zip(*rows_n)]
             rows_h = [list(c) for c in zip(*rows_h)]
-        name = "Modern.%s.thumb" % orient
+        name = P + "%s.thumb" % orient
         edge = px(8)
         element(name, img(rows_n), ("active", img(rows_h)),
                 border=(0, edge, 0, edge) if vert else (edge, 0, edge, 0), sticky="nswe")
@@ -315,7 +348,8 @@ def install(root, st, pal):
         if pixel:
             st.map("TNotebook.Tab", foreground=[("selected", pal["accent_fg"]), ("active", pal["text"])])
         else:
-            st.map("TNotebook.Tab", foreground=[("selected", accent), ("active", pal["text"])])
+            st.map("TNotebook.Tab", foreground=[("selected", pal["text"] if mac else accent),
+                                                ("active", pal["text"])])
     except Exception:
         pass
     _ALIVE.extend(keep)           # картинки должны жить всё время работы: иначе элементы рисуются пустыми

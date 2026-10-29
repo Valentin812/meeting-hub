@@ -229,7 +229,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         self.tr_text = self._text_tab(self.detail_nb, "Расшифровка")
         fix_bar = ttk.Frame(self.tr_text.master)
         fix_bar.pack(side="bottom", fill="x", before=self.tr_text, pady=(0, 6))
-        ttk.Label(fix_bar, text="Неверно определён голос? Выделите реплики мышью →", style="Small.TLabel").pack(
+        ttk.Label(fix_bar, text="Неверно определён голос? Щёлкните по реплике (или выделите несколько) →", style="Small.TLabel").pack(
             side="left")
         ttk.Button(fix_bar, text="Исправить голос у выделенного…", command=self.fix_selected_voice).pack(
             side="left", padx=(8, 0))
@@ -597,6 +597,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
 
     def _transcript_menu(self, event):
         """Правая кнопка по расшифровке: исправить голос у выделенных реплик."""
+        idx = self.tr_text.index(f"@{event.x},{event.y}")
+        for tag in self.tr_text.tag_names(idx):
+            if tag.startswith("seg") and tag[3:].isdigit():
+                self._last_seg = int(tag[3:])            # правая кнопка по реплике — она и исправляется
         menu = tk.Menu(self.tr_text, tearoff=False)
         menu.add_command(label="Исправить голос у выделенного…", command=self.fix_selected_voice)
         try:
@@ -612,6 +616,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             if tag.startswith("seg"):
                 text.tag_delete(tag)
         self._segments = []
+        self._last_seg = None
         if not segs:
             self._write(text, [("Расшифровки пока нет.", ("muted",))])
             return
@@ -625,9 +630,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             self._segments.append((float(s.get("start", 0)), float(s.get("end", 0)), tag))
         self._write(text, out)
         if wav.exists():
-            for start, _end, tag in self._segments:
+            for i, (start, _end, tag) in enumerate(self._segments):
                 text.tag_bind(tag, "<ButtonRelease-1>",
-                              lambda _e, t=start: None if text.tag_ranges("sel") else self.play_from(t))
+                              lambda _e, t=start, i=i: (setattr(self, "_last_seg", i),
+                                                        None if text.tag_ranges("sel") else self.play_from(t)))
                 text.tag_bind(tag, "<Enter>", lambda _e: text.configure(cursor="hand2"))
                 text.tag_bind(tag, "<Leave>", lambda _e: text.configure(cursor=""))
             self._now_tag = None
