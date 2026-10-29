@@ -30,6 +30,9 @@ class ModernTests(unittest.TestCase):
             self.assertEqual(rows[5][0], p["bg"])
             self.assertIn("{", modern.to_data(modern.underline_tab_rows(10, 8, p["bg"], p["border"], p["accent"])))
 
+    def test_images_kept_at_module_level(self):
+        self.assertIsInstance(modern._ALIVE, list)      # иначе PhotoImage удаляются и элементы рисуются пустыми
+
     def test_retro_themes_untouched(self):
         class Boom:
             def __getattr__(self, _n):
