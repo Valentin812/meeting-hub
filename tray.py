@@ -84,7 +84,7 @@ class Tray:
 
     @staticmethod
     def sounds_label(muted):
-        return "🔔 Включить звуки Windows" if muted else "🔕 Отключить звуки Windows на время записи"
+        return "🔔 Вернуть звуки (Windows и программы)" if muted else "🔕 Заглушить звуки на время записи"
 
     @staticmethod
     def confidential_label(on):
