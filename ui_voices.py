@@ -423,16 +423,28 @@ class VoicesUI:
             return
         note("Нажмите ▶, чтобы послушать отрывок, и впишите имя. «Вы» — это ваш микрофон, он подписан сам.")
         names = self.voice_profiles().names()
-        grid = ttk.Frame(tab)
-        grid.pack(fill="x")
-        for row, c in enumerate(clusters[:10]):
+        for c in clusters[:10]:
+            # каждый голос — блок в две строки: «Голос N · время» и имя; ниже отрывки — так не уезжает за край
             sec = int(c.get("seconds", 0))
-            ttk.Label(grid, text=f"Голос {c['id']}",
-                      font=(theme.FONT, 10, "bold"), width=11).grid(row=row, column=0, sticky="w", pady=6)
-            ttk.Label(grid, text=f"{sec // 60} мин {sec % 60:02d} с", style="Muted.TLabel", width=9).grid(
-                row=row, column=1, sticky="w")
-            clips = ttk.Frame(grid)
-            clips.grid(row=row, column=2, sticky="w", padx=(4, 12))
+            box = ttk.Frame(tab)
+            box.pack(fill="x", pady=(4, 6))
+            top = ttk.Frame(box)
+            top.pack(fill="x")
+            ttk.Label(top, text=f"Голос {c['id']}", font=(theme.FONT, 10, "bold")).pack(side="left")
+            ttk.Label(top, text=f"  {sec // 60} мин {sec % 60:02d} с", style="Muted.TLabel").pack(side="left")
+            var = tk.StringVar(value=c.get("name", ""))
+            cb = ttk.Combobox(top, textvariable=var, values=names + [self.NEW_PERSON], width=24)
+            cb.pack(side="left", padx=(12, 0))
+            cb.bind("<<ComboboxSelected>>", lambda _e, v=var, w=cb: (v.set(""), w.focus_set())
+                    if v.get() == self.NEW_PERSON else None)
+            if c.get("auto"):
+                ttk.Label(top, text="узнан по голосу", style="Small.TLabel").pack(side="left", padx=8)
+            elif not c.get("name") and c.get("guess"):
+                ttk.Label(top, text=f"похоже на {c['guess']} — не уверен", style="Small.TLabel").pack(
+                    side="left", padx=8)
+            widgets.flowify(top)
+            clips = ttk.Frame(box)
+            clips.pack(fill="x", pady=(4, 0))
             for k, clip in enumerate(c.get("clips") or []):
                 b = ttk.Button(clips, text=f"▶ {k + 1}", width=5,
                                command=lambda cl=clip: self.play_clip(wav, cl))
@@ -440,23 +452,14 @@ class VoicesUI:
                 if not wav.exists():
                     b.state(["disabled"])
             if wav.exists() and c.get("clips"):
-                mb = ttk.Menubutton(grid, text="Не тот?")
+                mb = ttk.Menubutton(clips, text="Не тот?")
                 menu = tk.Menu(mb, tearoff=False)
                 for k, clip in enumerate(c["clips"]):
                     menu.add_command(label=f"Отрывок {k + 1} — это другой человек…",
                                      command=lambda cl=clip, cid=c["id"]: self.clip_is_other(wav, cid, cl))
                 mb["menu"] = menu
-                mb.grid(row=row, column=3, sticky="w", padx=(0, 12))
-            var = tk.StringVar(value=c.get("name", ""))
-            cb = ttk.Combobox(grid, textvariable=var, values=names + [self.NEW_PERSON], width=22)
-            cb.grid(row=row, column=4, sticky="w")
-            cb.bind("<<ComboboxSelected>>", lambda _e, v=var, w=cb: (v.set(""), w.focus_set())
-                    if v.get() == self.NEW_PERSON else None)
-            if c.get("auto"):
-                ttk.Label(grid, text="узнан по голосу", style="Small.TLabel").grid(row=row, column=5, padx=8)
-            elif not c.get("name") and c.get("guess"):
-                ttk.Label(grid, text=f"похоже на {c['guess']} — не уверен", style="Small.TLabel").grid(
-                    row=row, column=5, padx=8)
+                mb.pack(side="left", padx=(8, 0))
+            widgets.flowify(clips)
             self._voice_rows.append((c, var))
         bar = ttk.Frame(tab)
         bar.pack(anchor="w", pady=(14, 0))
