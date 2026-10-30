@@ -359,7 +359,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             if hits is not None and hits.get(stem, {}).get("snippet"):
                 info = hits[stem]["snippet"]                 # где именно нашлось
             lock = "🔒 " if privacy.is_confidential(it, words) else ""
-            rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": lock + meeting_title(it),
+            short = re.sub(r"\s*·\s*\d{2}\.\d{2}\.\d{4}$", "", meeting_title(it))   # дата и так в заголовке дня
+            rows.append({"day": day_label(stem), "iid": str(it["path"]), "title": lock + (short or meeting_title(it)),
                          "info": info, "chip": chip, "key": key})
         lst = self.records_tree
         lst.set_rows(rows)

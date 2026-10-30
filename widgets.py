@@ -146,13 +146,20 @@ class MeetingList(ttk.Frame):
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.win, width=e.width))
         self.canvas.bind("<Enter>", lambda _e: self._wheel(True))
         self.canvas.bind("<Leave>", lambda _e: self._wheel(False))
-        self.title_font = tkfont.Font(family=theme.FONT, size=10, weight="bold")
+        self.title_font = tkfont.Font(**self._title_spec())
         self.small_font = tkfont.Font(family=theme.FONT, size=9)
-        self.day_font = tkfont.Font(family=theme.FONT, size=9, weight="bold")
+        self.day_font = tkfont.Font(family=theme.FONT, size=8, weight="bold")
         self.cards = {}            # iid -> dict(widgets)
         self.order = []
         self.selected = None
         self._structure = None
+
+    @staticmethod
+    def _title_spec():
+        """Полужирный Segoe UI выглядит легче жирного; у ретро-тем остаётся свой шрифт."""
+        if theme.FONT == "Segoe UI":
+            return {"family": "Segoe UI Semibold", "size": 10}
+        return {"family": theme.FONT, "size": 10, "weight": "bold"}
 
     # --- прокрутка колесом
     def _wheel(self, on):
@@ -175,8 +182,9 @@ class MeetingList(ttk.Frame):
     def set_pal(self, pal):
         self.pal = pal
         self._structure = None
-        for f in (self.title_font, self.small_font, self.day_font):
+        for f in (self.small_font, self.day_font):
             f.configure(family=theme.FONT)
+        self.title_font.configure(weight="normal", **self._title_spec())
 
     def set_rows(self, rows):
         structure = [(r["day"], r["iid"]) for r in rows]
@@ -191,7 +199,7 @@ class MeetingList(ttk.Frame):
                 if r["day"] != day:
                     day = r["day"]
                     tk.Label(self.inner, text=day.upper(), font=self.day_font, fg=self.pal["faint"],
-                             bg=self.pal.get("sidebar", self.pal["bg"]), anchor="w").pack(fill="x", padx=10, pady=(14 if self.order else 4, 4))
+                             bg=self.pal.get("sidebar", self.pal["bg"]), anchor="w").pack(fill="x", padx=10, pady=(10 if self.order else 2, 2))
                 self._make_card(r)
             self._structure = structure
             if self.selected not in self.cards:
@@ -207,26 +215,50 @@ class MeetingList(ttk.Frame):
         bar = tk.Frame(card, width=3, bg=pal.get("sidebar", pal["bg"]))
         bar.pack(side="left", fill="y")
         body = tk.Frame(card, bg=pal.get("sidebar", pal["bg"]))
-        body.pack(side="left", fill="both", expand=True, padx=(9, 10), pady=7)
-        chip = tk.Label(body, font=self.small_font, padx=7, pady=1)
-        chip.pack(side="right", anchor="n", pady=(2, 0))
+        body.pack(side="left", fill="both", expand=True, padx=(9, 10), pady=4)
         title = tk.Label(body, font=self.title_font, anchor="w", justify="left", bg=pal.get("sidebar", pal["bg"]), fg=pal["text"])
         title.pack(fill="x")
-        info = tk.Label(body, font=self.small_font, anchor="w", bg=pal.get("sidebar", pal["bg"]), fg=pal["muted"])
-        info.pack(fill="x")
-        w = {"card": card, "bar": bar, "body": body, "title": title, "info": info, "chip": chip, "hover": False}
+        row = tk.Frame(body, bg=pal.get("sidebar", pal["bg"]))      # время и метка — одной строкой
+        row.pack(fill="x")
+        chip = tk.Label(row, font=self.small_font, padx=6, pady=0)
+        chip.pack(side="right")
+        info = tk.Label(row, font=self.small_font, anchor="w", bg=pal.get("sidebar", pal["bg"]), fg=pal["muted"])
+        info.pack(side="left", fill="x", expand=True)
+        w = {"card": card, "bar": bar, "body": body, "title": title, "info": info, "chip": chip, "hover": False,
+             "row": row, "full": ""}
         self.cards[r["iid"]] = w
         self.order.append(r["iid"])
-        for widget in (card, body, title, info, chip, bar):
+        for widget in (card, body, title, info, chip, bar, row):
             widget.bind("<Button-1>", lambda _e, i=r["iid"]: self.select(i, notify=True))
             widget.bind("<Double-Button-1>", lambda _e, i=r["iid"]: self.on_open(i))
             widget.bind("<Enter>", lambda _e, i=r["iid"]: self._hover(i, True))
             widget.bind("<Leave>", lambda _e, i=r["iid"]: self._hover(i, False))
-        card.bind("<Configure>", lambda e, t=title: t.configure(wraplength=max(120, e.width - 110)))
+        card.bind("<Configure>", lambda e, i=r["iid"]: self._fit(i, e.width))
+
+    def _fit(self, iid, width=None):
+        """Название в одну строку: не помещается — обрезаем с «…» (целиком оно видно справа, в карточке)."""
+        w = self.cards.get(iid)
+        if w is None:
+            return
+        avail = max(60, (width or w["card"].winfo_width()) - 26)
+        full, font = w["full"], self.title_font
+        text = full
+        if font.measure(full) > avail:
+            lo, hi = 0, len(full)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if font.measure(full[:mid].rstrip() + "…") <= avail:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            text = full[:lo].rstrip() + "…"
+        if w["title"].cget("text") != text:
+            w["title"].configure(text=text)
 
     def _update_card(self, r):
         w = self.cards[r["iid"]]
-        w["title"].configure(text=r["title"])
+        w["full"] = r["title"]
+        self._fit(r["iid"])
         w["info"].configure(text=r["info"])
         bg, fg = self.pal["pill"][CHIP.get(r["key"], "off")]
         w["chip"].configure(text=r["chip"], bg=bg, fg=fg)
@@ -240,7 +272,7 @@ class MeetingList(ttk.Frame):
         w, pal = self.cards[iid], self.pal
         sel = iid == self.selected
         bg = pal["select"] if sel else (pal["hover"] if w["hover"] else pal.get("sidebar", pal["bg"]))
-        for key in ("card", "body", "title", "info"):
+        for key in ("card", "body", "title", "info", "row"):
             w[key].configure(bg=bg)
         w["title"].configure(fg=pal["select_fg"] if sel else pal["text"])
         w["info"].configure(fg=pal["select_fg"] if sel else pal["muted"])
