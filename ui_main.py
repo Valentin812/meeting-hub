@@ -16,6 +16,7 @@ from tkinter import ttk, filedialog, messagebox
 
 import appmute
 import daily
+import dictation
 import gigachat
 import recorder as rec_mod
 import importer
@@ -1169,6 +1170,14 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         if self.tray is None:
             cb2.state(["disabled"])
         hint(p, "Выйти полностью — правой кнопкой по значку у часов → «Выход».")
+        d_on = tk.BooleanVar(value=bool(s.get("dictation_enabled", True)))
+        ttk.Checkbutton(p, text="Голосовой ввод по сочетанию клавиш", variable=d_on).pack(anchor="w")
+        drow = ttk.Frame(p); drow.pack(anchor="w", padx=(28, 0))
+        ttk.Label(drow, text="Сочетание").pack(side="left")
+        d_key = tk.StringVar(value=s.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY)
+        ttk.Entry(drow, textvariable=d_key, width=20).pack(side="left", padx=8)
+        hint(p, "Нажмите сочетание в любой программе и говорите, нажмите ещё раз — текст появится там, где курсор. "
+                "Распознаётся на этом компьютере. Примеры: Ctrl+Alt+Space, Ctrl+Shift+D, Alt+F9.")
         row = ttk.Frame(p); row.pack(anchor="w", pady=(6, 0))
         ttk.Label(row, text="Оформление").pack(side="left")
         theme_var = tk.StringVar(value=dict((v, k) for k, v in self.THEMES).get(s.get("theme", "system"),
@@ -1418,6 +1427,17 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                     "GigaChat", "Тексты встреч (расшифровка и вопросы в чате) будут отправляться на сервер команды и дальше в облако Сбера.\n\n"
                     "Включить?", icon="warning", parent=win):
                 g_on.set(False)
+            if d_on.get():
+                try:
+                    dictation.parse_hotkey(d_key.get())
+                except dictation.DictationError as e:
+                    messagebox.showwarning("Голосовой ввод", f"Сочетание «{d_key.get()}»: {e}.", parent=win)
+                    return
+            dict_changed = (bool(d_on.get()), d_key.get().strip()) != (
+                bool(s.get("dictation_enabled", True)), s.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY)
+            s.update(dictation_enabled=bool(d_on.get()), dictation_hotkey=d_key.get().strip())
+            if dict_changed:
+                self.setup_dictation()
             new_theme = dict(self.THEMES)[theme_var.get()]
             s.update(close_to_tray=bool(tray_var.get()), check_updates=bool(upd.get()),
                      keep_audio_days=dict(self.KEEP_CHOICES)[keep.get()], whisper_model=model.get(), asr_engine=engines[engine.get()],

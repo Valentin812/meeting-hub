@@ -42,6 +42,7 @@ import ai_setup
 import updater
 import privacy
 import winsounds
+import dictation
 import appmute
 import tray as tray_mod
 import theme
@@ -376,6 +377,7 @@ class App(MainWindow):
         if not self.settings.get("first_run_done"):
             self.root.after(600, self.open_first_run)
         self.start_tray()
+        self.setup_dictation()
         import shutil
         shutil.rmtree(here / "updates", ignore_errors=True)          # установщик прошлого обновления
         self.sounds_backup = here / "win_sounds_backup.json"
@@ -510,19 +512,102 @@ class App(MainWindow):
     # ------------------------------------------------------------------
     # Расшифровка записей
     # ------------------------------------------------------------------
+    def make_asr_engine(self):
+        """Движок распознавания по настройкам: GigaAM с запасным Whisper или только Whisper."""
+        folder = self.data_dir / "models"
+        local = tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
+        if self.settings.get("asr_engine", "gigaam") == "gigaam":
+            import gigaam
+            local = gigaam.GigaAMWithFallback(gigaam.GigaAM(folder), local, notify=self._gigaam_fallback)
+        return local
+
+    # ------------------------------------------------------------------
+    # Голосовой ввод: сочетание клавиш → говорите → сочетание ещё раз → текст там, где курсор
+    # ------------------------------------------------------------------
+    def setup_dictation(self):
+        old = getattr(self, "hotkey", None)
+        if old is not None:
+            old.stop()
+            self.hotkey = None
+        if not dictation.supported() or not self.settings.get("dictation_enabled", True):
+            return
+        combo = self.settings.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY
+        put = self._ui_calls.put
+        try:
+            self.hotkey = dictation.HotkeyListener(combo, lambda: put((self.toggle_dictation, ()))).start()
+        except Exception as e:
+            self.hotkey = None
+            self._journal_note("Голосовой ввод не включён", f"{combo}: {e}", "auto")
+
+    def toggle_dictation(self):
+        cap = getattr(self, "dictation_cap", None)
+        if cap is None:
+            self._start_dictation()
+        else:
+            self._finish_dictation()
+
+    def _start_dictation(self):
+        try:
+            backend = rec_mod.AutoBackend()
+        except Exception as e:
+            self.toast(f"Голосовой ввод: микрофон недоступен ({e})", seconds=8)
+            return
+        self.dictation_hwnd = dictation.foreground_window()
+        self.dictation_cap = dictation.MicCapture(backend).start()
+        combo = self.settings.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY
+        self.dictation_toast = self.toast(f"🎙 Говорите… Нажмите {combo} ещё раз — текст вставится, где курсор.",
+                                          seconds=dictation.MAX_SEC + 5)
+        if self.tray is not None:
+            self.tray.notify("Говорите — нажмите сочетание ещё раз, чтобы вставить текст.", "Голосовой ввод")
+
+        def watch():
+            cap = getattr(self, "dictation_cap", None)
+            if cap is None:
+                return
+            if cap.full:                                  # слишком долго — заканчиваем сами
+                self._finish_dictation()
+            else:
+                self.root.after(500, watch)
+        self.root.after(500, watch)
+
+    def _finish_dictation(self):
+        cap, self.dictation_cap = self.dictation_cap, None
+        hwnd = getattr(self, "dictation_hwnd", None)
+        t = getattr(self, "dictation_toast", None)
+        if t is not None:
+            try:
+                t.destroy()
+            except tk.TclError:
+                pass
+        language = None if self.settings.get("language", "ru") == "auto" else self.settings.get("language", "ru")
+
+        def work():
+            text, err = "", ""
+            try:
+                samples = cap.stop()
+                engine = getattr(self, "_dictation_engine", None)
+                if engine is None:
+                    engine = self._dictation_engine = self.make_asr_engine()
+                text = dictation.transcribe(engine, samples, language)
+            except Exception as e:
+                err = str(e)
+
+            def done():
+                if err:
+                    self.toast("Голосовой ввод: " + err, seconds=8)
+                elif text:
+                    try:
+                        dictation.paste(self.root, text, hwnd)
+                    except Exception as e:
+                        self.log.exception("Вставка текста")
+                        self.toast("Голосовой ввод: не удалось вставить текст — он в буфере обмена.", seconds=8)
+            self._ui_calls.put((done, ()))
+        threading.Thread(target=work, name="dictation", daemon=True).start()
+
     def transcribe_queue(self):
         if getattr(self, "tq", None) is None:
-            folder = self.data_dir / "models"
-
-            def factory():
-                local = tr_mod.LocalWhisper(folder, size=self.settings.get("whisper_model", tr_mod.DEFAULT_MODEL))
-                if self.settings.get("asr_engine", "gigaam") == "gigaam":
-                    import gigaam
-                    local = gigaam.GigaAMWithFallback(gigaam.GigaAM(folder), local, notify=self._gigaam_fallback)
-                return local
-
             self.tq = tr_mod.TranscriptionQueue(
-                factory, language=self.settings.get("language", "ru"), log=self.log,
+                self.make_asr_engine, language=self.settings.get("language", "ru"), log=self.log,
                 on_done=lambda key, st: self._ui_calls.put((self._transcribed, (key, st))))
         return self.tq
 
@@ -915,8 +1000,9 @@ class App(MainWindow):
             y = win.winfo_screenheight() - win.winfo_height() - 72
             win.geometry(f"+{x}+{y}")
             win.after(seconds * 1000, lambda: win.winfo_exists() and win.destroy())
+            return win
         except tk.TclError:
-            pass
+            return None
 
     def cancel_transcription(self, wav=None):
         tq = getattr(self, "tq", None)
@@ -1877,6 +1963,8 @@ class App(MainWindow):
             self.tray = None
 
     def quit_app(self):
+        if getattr(self, "hotkey", None) is not None:
+            self.hotkey.stop()
         self.restore_win_sounds("Программа закрыта")
         if self.app_muter is not None:
             muter, self.app_muter = self.app_muter, None
