@@ -52,7 +52,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.43.1"
+APP_VERSION = "7.44.0"
 
 import support
 from support import app_dir, data_dir
