@@ -52,7 +52,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.43.0"
+APP_VERSION = "7.43.1"
 
 import support
 from support import app_dir, data_dir
@@ -546,10 +546,18 @@ class App(MainWindow):
     def toggle_dictation(self):
         self.log.info("Голосовой ввод: нажато сочетание")
         cap = getattr(self, "dictation_cap", None)
-        if cap is None:
-            self._start_dictation()
-        else:
-            self._finish_dictation()
+        try:
+            if cap is None:
+                self._journal_note("Голосовой ввод: нажато сочетание", "запись с микрофона", "user")
+                self._start_dictation()
+            else:
+                self._journal_note("Голосовой ввод: нажато сочетание", "распознаю и вставляю", "user")
+                self._finish_dictation()
+        except Exception as e:
+            self.log.exception("Голосовой ввод")
+            self.dictation_cap = None
+            self._journal_note("Голосовой ввод: ошибка", f"{type(e).__name__}: {e}", "auto")
+            self.toast(f"Голосовой ввод: ошибка — {e}", seconds=10)
 
     def _start_dictation(self):
         try:
@@ -600,6 +608,7 @@ class App(MainWindow):
 
             def done():
                 if err:
+                    self._journal_note("Голосовой ввод: ошибка", err, "auto")
                     self.toast("Голосовой ввод: " + err, seconds=8)
                 elif text:
                     try:
