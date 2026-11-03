@@ -535,11 +535,16 @@ class App(MainWindow):
         put = self._ui_calls.put
         try:
             self.hotkey = dictation.HotkeyListener(combo, lambda: put((self.toggle_dictation, ()))).start()
+            self.dictation_status = f"работает: {combo}"
+            self._journal_note("Голосовой ввод включён", combo, "auto")
         except Exception as e:
             self.hotkey = None
+            self.dictation_status = f"не работает: {e}"
+            self.log.warning("Голосовой ввод: %s: %s", combo, e)
             self._journal_note("Голосовой ввод не включён", f"{combo}: {e}", "auto")
 
     def toggle_dictation(self):
+        self.log.info("Голосовой ввод: нажато сочетание")
         cap = getattr(self, "dictation_cap", None)
         if cap is None:
             self._start_dictation()
@@ -590,6 +595,7 @@ class App(MainWindow):
                     engine = self._dictation_engine = self.make_asr_engine()
                 text = dictation.transcribe(engine, samples, language)
             except Exception as e:
+                self.log.exception("Голосовой ввод")
                 err = str(e)
 
             def done():
@@ -1953,6 +1959,7 @@ class App(MainWindow):
                                       is_system_muted=lambda: bool(self.recorder and self.recorder.system_muted),
                                       on_confidential=lambda: put((self.toggle_recording_confidential, ())),
                                       is_confidential=lambda: bool(self.recorder and self.recorder.confidential),
+                                      on_dictate=lambda: put((self.toggle_dictation, ())),
                                       on_sounds=(lambda: put((self.toggle_win_sounds, ())))
                                       if winsounds.supported() else None,
                                       sounds_muted=lambda: self.sounds_are_muted(),
