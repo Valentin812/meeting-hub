@@ -1323,10 +1323,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         ttk.Separator(p).pack(fill="x", pady=(14, 8))
         ttk.Label(p, text="GigaChat (необязательно)", style="H2.TLabel").pack(anchor="w")
         g_code = tk.StringVar(value=s.get("giga_code", ""))
-        hint(p, "Код доступа к GigaChat. Его выдаёт администратор; ключи Сбера в программе "
-                "не нужны и нигде не хранятся.")
+        hint(p, "Код вводить не нужно, если подключён Канбан или CRM «Этажи» (ниже) — GigaChat пустит по ним. "
+                "Код доступа — запасной вариант, его выдаёт администратор. Ключи Сбера в программе не хранятся.")
         grow = ttk.Frame(p); grow.pack(fill="x")
-        ttk.Label(grow, text="Код доступа").pack(side="left")
+        ttk.Label(grow, text="Код доступа (необязательно)").pack(side="left")
         ttk.Entry(grow, textvariable=g_code, show="•", width=34).pack(side="left", padx=8)
 
         g_on = tk.BooleanVar(value=bool(s.get("giga_enabled")))

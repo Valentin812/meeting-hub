@@ -134,6 +134,12 @@ class Client:
             headers["Authorization"] = "Bearer " + self.token
             return _request(method, self.base + path, body, headers, opener=self.opener)
 
+    def session_token(self):
+        """Действующая сессия CRM (для пропуска к GigaChat); при необходимости входим заново."""
+        if not self.token or self.clock() >= self.until:
+            self._login()
+        return self.token
+
     def me(self):
         data = self.call("GET", "/api/me")
         user = data.get("operator") or data.get("user") or data

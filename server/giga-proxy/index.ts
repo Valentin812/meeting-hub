@@ -1,12 +1,15 @@
 // Meeting Hub: посредник к GigaChat (Supabase Edge Function).
 // Ключ Сбера хранится только здесь, в секретах проекта, и никогда не попадает в программу и в GitHub.
-// Программа ходит сюда с личным кодом доступа сотрудника; код можно отозвать, не меняя ключ Сбера.
+// Пропуск — что-то одно: подключённый Канбан (x-kanban-token), вход в CRM «Этажи» (x-crm-token)
+// или запасной код доступа (x-hub-token). Канбан и CRM сервер проверяет у них самих: отключили человека там —
+// у него пропал и GigaChat. Ключ Сбера при этом не меняется.
 //
 // Секреты (Edge Functions → Secrets):
 //   GIGACHAT_AUTH_KEY — ключ авторизации из кабинета Сбера (в base64, как выдан)
 //   GIGACHAT_SCOPE    — необязательно, по умолчанию GIGACHAT_API_PERS
 //   SBER_CA_PEM       — корневой сертификат Минцифры (текст .crt целиком), нужен для TLS к серверам Сбера
-//   TEAM_TOKENS       — коды доступа через запятую: «имя:код,имя2:код2»
+//   TEAM_TOKENS       — необязательно: запасные коды доступа через запятую «имя:код,имя2:код2»
+//   CRM_URL           — необязательно: адрес API CRM «Этажи» (по умолчанию ниже)
 
 const OAUTH = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const CHAT = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions";
@@ -17,7 +20,7 @@ const RETRY_MS = [2000, 5000, 10000];
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-hub-token",
+  "Access-Control-Allow-Headers": "content-type, x-hub-token, x-kanban-token, x-crm-token",
 };
 const json = (obj: unknown, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -68,7 +71,64 @@ async function accessToken(service = "giga"): Promise<{ token: string; until: nu
   return (cache[service] = { token: d.access_token, until });
 }
 
-function who(req: Request): string | null {
+const KANBAN_CHECK = "https://vdlfdnhfiiltdyrucdtn.supabase.co/functions/v1/meeting-intake";
+const KANBAN_KEY = "sb_publishable_uXYluucSC1Grq-Tub20S6Q_rvDJj7HH";   // открытый ключ приложения Канбан
+const CRM_DEFAULT = "https://samsonovtsi-chat-713b.twc1.net";
+const passCache = new Map<string, { name: string; until: number }>();   // sha256(пропуска) → кто, до когда
+
+async function digest(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function verified(kind: string, token: string, check: () => Promise<string | null>): Promise<string | null> {
+  const key = kind + ":" + (await digest(token));
+  const hit = passCache.get(key);
+  if (hit && Date.now() < hit.until) return hit.name;
+  let name: string | null = null;
+  try {
+    name = await check();
+  } catch {
+    name = null;
+  }
+  if (name) passCache.set(key, { name, until: Date.now() + 10 * 60_000 });
+  if (passCache.size > 500) passCache.clear();
+  return name;
+}
+
+function viaKanban(token: string): Promise<string | null> {
+  return verified("kanban", token, async () => {
+    const r = await fetch(KANBAN_CHECK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": KANBAN_KEY, "x-meeting-token": token },
+      body: JSON.stringify({ action: "check" }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.ok ? "Канбан: " + (d.email || "сотрудник") : null;
+  });
+}
+
+function viaCrm(token: string): Promise<string | null> {
+  return verified("crm", token, async () => {
+    const base = (Deno.env.get("CRM_URL") || CRM_DEFAULT).replace(/\/$/, "");
+    const r = await fetch(base + "/api/me", { headers: { "Authorization": "Bearer " + token, "Accept": "application/json" } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const u = d.operator ?? d.user ?? d;
+    return "CRM: " + (u.name || u.login || u.email || u.id || "сотрудник");
+  });
+}
+
+async function who(req: Request): Promise<string | null> {
+  const kanban = req.headers.get("x-kanban-token") ?? "";
+  if (kanban.length >= 20) return await viaKanban(kanban);
+  const crm = req.headers.get("x-crm-token") ?? "";
+  if (crm.length >= 20) return await viaCrm(crm);
+  return byCode(req);
+}
+
+function byCode(req: Request): string | null {
   const given = req.headers.get("x-hub-token") ?? "";
   if (!given) return null;
   for (const item of (Deno.env.get("TEAM_TOKENS") ?? "").split(",")) {
@@ -102,8 +162,8 @@ function queued<T>(job: () => Promise<T>): Promise<T> {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  const name = who(req);
-  if (!name) return json({ error: "неверный код доступа" }, 401);
+  const name = await who(req);
+  if (!name) return json({ error: "пропуск не принят: подключите Канбан или CRM в программе или проверьте код доступа" }, 401);
   if (limited(name)) return json({ error: "слишком много запросов, попробуйте позже" }, 429);
 
   if (req.method === "GET") {           // проверка из настроек программы

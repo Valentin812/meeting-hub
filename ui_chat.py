@@ -117,7 +117,7 @@ class ChatUI:
         return who + " Модель может ошибаться — важное проверяйте по расшифровке."
 
     def cloud_chat_on(self):
-        return bool(self.settings.get("giga_enabled") and (self.settings.get("giga_code") or "").strip())
+        return bool(self.settings.get("giga_enabled") and self.giga_pass_available())
 
     def chat_send(self):
         question = self.chat_var.get().strip()

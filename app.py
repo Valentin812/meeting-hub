@@ -633,10 +633,10 @@ class App(MainWindow):
         local = (model or s.get("ollama_model") or DEFAULT_MODEL).strip()
         code = (s.get("giga_code") or "").strip()
         mask = bool(s.get("privacy_mask", True))
-        sig = (code, s.get("giga_proxy_url"), s.get("giga_model"), local, bool(s.get("giga_enabled")), mask)
+        sig = (code, s.get("giga_proxy_url"), s.get("giga_model"), local, bool(s.get("giga_enabled")), mask,
+               s.get("kanban_token"), s.get("crm_password"), s.get("crm_login"))
         if getattr(self, "_router_sig", None) != sig or getattr(self, "_router", None) is None:
-            client = gigachat.ProxyClient(code, s.get("giga_proxy_url") or gigachat.PROXY_URL) \
-                if s.get("giga_enabled") and code else None
+            client = self.giga_client() if s.get("giga_enabled") and self.giga_pass_available() else None
             self._router = gigachat.LlmRouter(local, client, s.get("giga_model") or gigachat.DEFAULT_MODEL,
                                               notify=self._giga_fallback, mask=mask, log=self._giga_logged)
             self._router_sig = sig
@@ -663,13 +663,23 @@ class App(MainWindow):
         self._ui_calls.put((lambda: self._journal_note(
             "GigaChat недоступен", f"{reason}. Использую локальную модель.", "auto"), ()))
 
-    def check_giga(self, code, parent=None):
-        import gigachat
+    def giga_pass_available(self, code=None):
+        """GigaChat пускает по коду доступа, по подключённому Канбану или по входу в CRM — что-то одно."""
+        code = self.settings.get("giga_code") if code is None else code
+        return bool((code or "").strip() or self.settings.get("kanban_token") or self.crm_configured())
 
+    def giga_client(self, code=None, timeout=180):
+        import gigachat
+        s = self.settings
+        code = s.get("giga_code") if code is None else code
+        crm = (lambda: self.crm_client().session_token()) if self.crm_configured() else None
+        return gigachat.ProxyClient(code, s.get("giga_proxy_url") or gigachat.PROXY_URL, timeout=timeout,
+                                    kanban_token=s.get("kanban_token") or "", crm_token=crm)
+
+    def check_giga(self, code, parent=None):
         def worker():
             try:
-                msg = gigachat.ProxyClient(code, self.settings.get("giga_proxy_url") or gigachat.PROXY_URL,
-                                           timeout=30).check()
+                msg = self.giga_client(code, timeout=30).check()
                 show = messagebox.showinfo
             except Exception as e:
                 msg, show = f"Не получилось: {e}", messagebox.showwarning
