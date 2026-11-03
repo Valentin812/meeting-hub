@@ -184,7 +184,7 @@ class MeetingList(ttk.Frame):
         self._structure = None
         for f in (self.small_font, self.day_font):
             f.configure(family=theme.FONT)
-        self.title_font.configure(weight="normal", **self._title_spec())
+        self.title_font.configure(**{"weight": "normal", **self._title_spec()})
 
     def set_rows(self, rows):
         structure = [(r["day"], r["iid"]) for r in rows]
