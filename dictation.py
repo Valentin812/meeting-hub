@@ -55,6 +55,69 @@ def parse_hotkey(text):
     return mods, vk
 
 
+MODIFIER_KEYSYMS = {"Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Alt_R", "Meta_L", "Meta_R",
+                    "Super_L", "Super_R", "Win_L", "Win_R", "Caps_Lock", "Num_Lock", "ISO_Level3_Shift"}
+KEY_NAMES = {"space": "Space", "Return": "Enter", "Tab": "Tab", "Insert": "Insert", "Home": "Home", "End": "End",
+             "Pause": "Pause", "Prior": "PgUp", "Next": "PgDn", "grave": "`"}
+
+
+VK_NAMES = {0x20: "Space", 0x0D: "Enter", 0x09: "Tab", 0x2D: "Insert", 0x24: "Home", 0x23: "End", 0x13: "Pause",
+            0x21: "PgUp", 0x22: "PgDn", 0xC0: "`"}
+
+
+def _key_from_vk(vk):
+    if vk in VK_NAMES:
+        return VK_NAMES[vk]
+    if 0x41 <= vk <= 0x5A or 0x30 <= vk <= 0x39:
+        return chr(vk)
+    if 0x70 <= vk <= 0x87:
+        return f"F{vk - 0x6F}"
+    return None
+
+
+def combo_from_event(state, keysym, windows=True, keycode=None):
+    """Сочетание из нажатия в окне настроек: (state, keysym) Tk → «Ctrl+Alt+Space».
+    None — нажат только модификатор (ждём основную клавишу). DictationError — такое сочетание не подходит."""
+    if keysym in MODIFIER_KEYSYMS:
+        return None
+    parts = []
+    if state & 0x4:
+        parts.append("Ctrl")
+    if state & (0x20000 if windows else 0x8):
+        parts.append("Alt")
+    if state & 0x1:
+        parts.append("Shift")
+    vk_key = _key_from_vk(keycode) if windows and keycode else None   # по коду клавиши — не зависит от раскладки
+    if keycode in (0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5) and windows:
+        return None
+    if vk_key:
+        key = vk_key
+    elif keysym in KEY_NAMES:
+        key = KEY_NAMES[keysym]
+    elif len(keysym) == 1 and keysym.isascii() and keysym.isalnum():
+        key = keysym.upper()
+    elif keysym.startswith("F") and keysym[1:].isdigit():
+        key = keysym
+    else:
+        raise DictationError("эта клавиша не подходит — возьмите букву, цифру, F1–F24 или пробел")
+    combo = "+".join(parts + [key])
+    parse_hotkey(combo)                                   # без модификатора — ошибка с понятным текстом
+    return combo
+
+
+def is_free(combo):
+    """Свободно ли сочетание в Windows: пробуем занять и сразу отпускаем. Не Windows — считаем свободным."""
+    mods, vk = parse_hotkey(combo)
+    if not supported():
+        return True
+    import ctypes
+    user32 = ctypes.windll.user32
+    if not user32.RegisterHotKey(None, 0x7ABC, mods | MOD_NOREPEAT, vk):
+        return False
+    user32.UnregisterHotKey(None, 0x7ABC)
+    return True
+
+
 def clean_text(segments):
     """Склеить реплики распознавания в одну фразу для поля ввода."""
     text = " ".join((s.get("text") or "").strip() for s in segments if (s.get("text") or "").strip())

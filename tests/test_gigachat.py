@@ -46,6 +46,9 @@ class Giga(BaseHTTPRequestHandler):
         self._json(200, {"choices": [{"message": {"content": "Вот JSON:\n" + answer}}]})
 
     def do_GET(self):
+        Giga.auth = {k: v for k, v in self.headers.items() if k.lower().startswith("x-")}
+        if self.headers.get("x-kanban-token") == "KAN" or self.headers.get("x-crm-token") == "JWT":
+            return self._json(200, {"ok": True, "user": "Сотрудник"})
         if self.headers.get("x-hub-token") != "CODE":
             return self._json(401, {"error": "неверный код доступа"})
         self._json(200, {"ok": True, "user": "Тест"})
@@ -80,13 +83,19 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(got, ["Договорились ", "на пятницу."])
 
     def test_check_and_wrong_code(self):
-        self.assertIn("код принят", self.client.check())
+        self.assertIn("пропуск принят", self.client.check())
         bad = gigachat.ProxyClient("WRONG", url=self.client.url)
         with self.assertRaises(gigachat.GigaError) as cm:
             bad.check()
         self.assertIn("401", str(cm.exception))
         with self.assertRaises(gigachat.GigaError):
             gigachat.ProxyClient("").check()
+
+    def test_pass_by_kanban_or_crm_without_code(self):
+        self.assertIn("Сотрудник", gigachat.ProxyClient("", url=self.client.url, kanban_token="KAN").check())
+        self.assertIn("Сотрудник", gigachat.ProxyClient("", url=self.client.url, crm_token=lambda: "JWT").check())
+        gigachat.ProxyClient("CODE", url=self.client.url, kanban_token="KAN").check()
+        self.assertIn("X-Hub-Token", {k.title(): v for k, v in Giga.auth.items()})   # код важнее остальных
 
     def test_http_error(self):
         Giga.mode = "fail"

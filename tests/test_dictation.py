@@ -44,6 +44,19 @@ class DictationTests(unittest.TestCase):
             with self.assertRaises(dictation.DictationError):
                 dictation.parse_hotkey(bad)
 
+    def test_combo_from_key_press(self):
+        self.assertEqual(dictation.combo_from_event(0x4 | 0x20000, "space"), "Ctrl+Alt+Space")
+        self.assertEqual(dictation.combo_from_event(0x4 | 0x1, "d"), "Ctrl+Shift+D")
+        self.assertEqual(dictation.combo_from_event(0x20000, "F9"), "Alt+F9")
+        self.assertIsNone(dictation.combo_from_event(0x4, "Control_L"))        # ждём основную клавишу
+        with self.assertRaises(dictation.DictationError):
+            dictation.combo_from_event(0, "space")                              # без модификатора нельзя
+        with self.assertRaises(dictation.DictationError):
+            dictation.combo_from_event(0x4, "Cyrillic_ve")
+        self.assertEqual(dictation.combo_from_event(0x4 | 0x1, "Cyrillic_ve", True, 0x44), "Ctrl+Shift+D")  # русская раскладка
+        self.assertIsNone(dictation.combo_from_event(0x4, "??", True, 0x11))
+        self.assertTrue(dictation.is_free("Ctrl+Alt+Space"))                   # не Windows — свободно
+
     def test_capture_and_transcribe(self):
         cap = dictation.MicCapture(Backend(0.3)).start()
         time.sleep(0.7)

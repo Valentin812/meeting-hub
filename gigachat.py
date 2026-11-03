@@ -36,17 +36,32 @@ def _busy(error):
 class ProxyClient:
     """GigaChat через сервер-посредник: ключ Сбера хранится на сервере, в программе только код доступа."""
 
-    def __init__(self, code, url=PROXY_URL, timeout=180, retry_delays=None):
+    def __init__(self, code, url=PROXY_URL, timeout=180, retry_delays=None, kanban_token="", crm_token=None):
+        """Пропуск к GigaChat — любой из: код доступа, ключ Канбана, вход в CRM (crm_token() — свежая сессия)."""
         self.code = (code or "").strip()
+        self.kanban_token = (kanban_token or "").strip()
+        self.crm_token = crm_token
         self.url = (url or PROXY_URL).rstrip("/")
         self.timeout = timeout
         self.retry_delays = RETRY_DELAYS if retry_delays is None else retry_delays
 
+    def _auth_headers(self):
+        if self.code:
+            return {"x-hub-token": self.code}
+        if self.kanban_token:
+            return {"x-kanban-token": self.kanban_token}
+        if self.crm_token is not None:
+            try:
+                token = self.crm_token()
+            except Exception as e:
+                raise GigaError(f"не удалось войти в CRM: {e}")
+            if token:
+                return {"x-crm-token": token}
+        raise GigaError("нет пропуска: подключите Канбан или CRM, или впишите код доступа")
+
     def _request(self, data=None):
-        if not self.code:
-            raise GigaError("не указан код доступа")
         req = urllib.request.Request(self.url, data=data, method="POST" if data is not None else "GET", headers={
-            "x-hub-token": self.code, "Content-Type": "application/json", "User-Agent": "MeetingHub"})
+            **self._auth_headers(), "Content-Type": "application/json", "User-Agent": "MeetingHub"})
         try:
             return urllib.request.urlopen(req, timeout=self.timeout)
         except urllib.error.HTTPError as e:
@@ -64,7 +79,7 @@ class ProxyClient:
             data = json.loads(r.read().decode("utf-8"))
         if not data.get("ok"):
             raise GigaError(data.get("error") or "сервис не готов")
-        return f"Подключение работает: код принят ({data.get('user', '')})."
+        return f"Подключение работает: пропуск принят ({data.get('user', '')})."
 
     def _queued(self, call, cancel_event=None):
         """Запросы идут по очереди; если сервис занят — ждём и повторяем несколько раз."""
