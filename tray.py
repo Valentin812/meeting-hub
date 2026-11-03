@@ -61,12 +61,13 @@ class Tray:
                  on_mute=lambda: None, is_muted=lambda: False,
                  on_mute_system=lambda: None, is_system_muted=lambda: False,
                  on_confidential=lambda: None, is_confidential=lambda: False,
-                 on_sounds=None, sounds_muted=lambda: False):
+                 on_sounds=None, sounds_muted=lambda: False, on_dictate=None):
         self.on_open, self.on_record, self.on_quit = on_open, on_record, on_quit
         self.on_mute, self.is_muted = on_mute, is_muted
         self.on_mute_system, self.is_system_muted = on_mute_system, is_system_muted
         self.on_confidential, self.is_confidential = on_confidential, is_confidential
         self.on_sounds, self.sounds_muted = on_sounds, sounds_muted
+        self.on_dictate = on_dictate
         self.is_recording = is_recording
         self.elapsed = elapsed
         self.icon = None
@@ -125,6 +126,8 @@ class Tray:
                              visible=lambda _i: bool(rec() and self.on_sounds is not None)),
             pystray.MenuItem("■ Остановить запись", lambda *_: self.on_record(), visible=rec),
             pystray.MenuItem("Открыть Meeting Hub", lambda *_: self.on_open(), default=True),
+            pystray.MenuItem("🎙 Голосовой ввод (начать / вставить)", lambda *_: self.on_dictate(),
+                             visible=lambda _i: self.on_dictate is not None),
             pystray.MenuItem("● Начать запись", lambda *_: self.on_record(), visible=lambda _i: not rec()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Выход", lambda *_: self.on_quit()),

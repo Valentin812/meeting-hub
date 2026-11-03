@@ -153,6 +153,8 @@ class HotkeyListener:
         self.mods, self.vk = parse_hotkey(hotkey)
         self.on_press = on_press
         self.error = ""
+        self.ok = False
+        self.presses = 0
         self._tid = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, name="dictation-hotkey", daemon=True)
@@ -162,22 +164,34 @@ class HotkeyListener:
         self._ready.wait(3)
         if self.error:
             raise DictationError(self.error)
+        if not self.ok:
+            raise DictationError("сочетание не зарегистрировалось (нет ответа от Windows)")
         return self
 
     def _run(self):
-        import ctypes
-        from ctypes import wintypes
-        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
-        self._tid = kernel32.GetCurrentThreadId()
-        if not user32.RegisterHotKey(None, 1, self.mods | MOD_NOREPEAT, self.vk):
-            self.error = "сочетание уже занято другой программой — выберите другое в настройках"
-            self._ready.set()
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32, kernel32 = ctypes.WinDLL("user32", use_last_error=True), ctypes.windll.kernel32
+            user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+            user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+            self._tid = kernel32.GetCurrentThreadId()
+            if not user32.RegisterHotKey(None, 1, self.mods | MOD_NOREPEAT, self.vk):
+                code = ctypes.get_last_error()
+                self.error = ("сочетание уже занято другой программой — выберите другое в настройках"
+                              if code == 1409 else f"Windows не дала зарегистрировать сочетание (код {code})")
+                return
+            self.ok = True
+        except Exception as e:                                  # любая ошибка — видна, а не молча
+            self.error = f"{type(e).__name__}: {e}"
             return
-        self._ready.set()
+        finally:
+            self._ready.set()
         msg = wintypes.MSG()
         try:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == self.WM_HOTKEY:
+                    self.presses += 1
                     try:
                         self.on_press()
                     except Exception:
@@ -189,6 +203,7 @@ class HotkeyListener:
         if self._tid:
             import ctypes
             ctypes.windll.user32.PostThreadMessageW(self._tid, self.WM_QUIT, 0, 0)
+            self._thread.join(timeout=2)                     # сочетание освобождено — можно занять заново
 
 
 def foreground_window():

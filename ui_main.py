@@ -1176,6 +1176,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         ttk.Label(drow, text="Сочетание").pack(side="left")
         d_key = tk.StringVar(value=s.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY)
         ttk.Entry(drow, textvariable=d_key, width=20).pack(side="left", padx=8)
+        ttk.Label(drow, text=getattr(self, "dictation_status", "") or ("выключен" if not s.get("dictation_enabled", True)
+                                                                      else ""), style="Small.TLabel").pack(side="left")
         hint(p, "Нажмите сочетание в любой программе и говорите, нажмите ещё раз — текст появится там, где курсор. "
                 "Распознаётся на этом компьютере. Примеры: Ctrl+Alt+Space, Ctrl+Shift+D, Alt+F9.")
         row = ttk.Frame(p); row.pack(anchor="w", pady=(6, 0))
