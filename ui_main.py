@@ -1175,11 +1175,51 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         drow = ttk.Frame(p); drow.pack(anchor="w", padx=(28, 0))
         ttk.Label(drow, text="Сочетание").pack(side="left")
         d_key = tk.StringVar(value=s.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY)
-        ttk.Entry(drow, textvariable=d_key, width=20).pack(side="left", padx=8)
-        ttk.Label(drow, text=getattr(self, "dictation_status", "") or ("выключен" if not s.get("dictation_enabled", True)
-                                                                      else ""), style="Small.TLabel").pack(side="left")
-        hint(p, "Нажмите сочетание в любой программе и говорите, нажмите ещё раз — текст появится там, где курсор. "
-                "Распознаётся на этом компьютере. Примеры: Ctrl+Alt+Space, Ctrl+Shift+D, Alt+F9.")
+        d_field = ttk.Entry(drow, textvariable=d_key, width=20, state="readonly")
+        d_field.pack(side="left", padx=8)
+        d_status = ttk.Label(drow, text=getattr(self, "dictation_status", "") or (
+            "выключен" if not s.get("dictation_enabled", True) else ""), style="Small.TLabel")
+
+        def capture():
+            """Записать сочетание: пользователь просто нажимает клавиши, программа сама их определяет."""
+            old = d_key.get()
+            own = s.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY
+            hk = getattr(self, "hotkey", None)
+            if hk is not None:                    # своё сочетание на время записи отпускаем, иначе его не поймать
+                hk.stop()
+                self.hotkey = None
+            d_key.set("Нажмите сочетание…")
+            d_status.config(text="Esc — отмена")
+            d_field.focus_set()
+
+            def done(combo=None, msg=""):
+                win.unbind("<KeyPress>")
+                d_key.set(combo or old)
+                d_status.config(text=msg)
+                self.setup_dictation()             # вернуть рабочее сочетание (новое заработает после «Сохранить»)
+
+            def key(e):
+                if e.keysym == "Escape":
+                    done(None, "")
+                    return "break"
+                try:
+                    combo = dictation.combo_from_event(e.state, e.keysym, dictation.supported(), e.keycode)
+                except dictation.DictationError as err:
+                    d_status.config(text=str(err))
+                    return "break"
+                if combo is None:
+                    return "break"                 # нажат только Ctrl/Alt/Shift — ждём основную клавишу
+                if combo != own and not dictation.is_free(combo):
+                    d_status.config(text=f"{combo} уже занято другой программой — нажмите другое")
+                    return "break"
+                done(combo, "свободно ✓ — нажмите «Сохранить»" if combo != own else "текущее сочетание")
+                return "break"
+            win.bind("<KeyPress>", key)
+        ttk.Button(drow, text="Записать сочетание", command=capture).pack(side="left")
+        d_status.pack(side="left", padx=(8, 0))
+        hint(p, "Нажмите «Записать сочетание» и нажмите нужные клавиши — программа сама их определит и проверит, "
+                "не заняты ли они другой программой. Потом в любой программе: сочетание — говорите — сочетание "
+                "ещё раз, и текст появится там, где курсор. Распознаётся на этом компьютере.")
         row = ttk.Frame(p); row.pack(anchor="w", pady=(6, 0))
         ttk.Label(row, text="Оформление").pack(side="left")
         theme_var = tk.StringVar(value=dict((v, k) for k, v in self.THEMES).get(s.get("theme", "system"),
