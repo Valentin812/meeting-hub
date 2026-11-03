@@ -308,7 +308,11 @@ class FirstRunWizard(tk.Toplevel):
         self.app.settings["recording_consent"] = consent
         if not consent:
             self.app.settings["record_meetings"] = False
+            self.app.settings["record_off_by_consent"] = True
             self.app.record_meetings.set(False)
+        elif self.app.settings.pop("record_off_by_consent", False):
+            self.app.settings["record_meetings"] = True
+            self.app.record_meetings.set(True)
         self.app.settings["first_run_done"] = True
         self.app.save_settings()
         self.app.wizard = None
@@ -447,6 +451,12 @@ class App(MainWindow):
                 self.rec_by_meeting = True
             elif self.record_meetings.get():
                 self.start_recording("Запись встречи", decision.initiator, by_meeting=True)
+            else:                                   # раньше молчали — теперь видно, почему записи нет
+                self._journal_note("Запись не начата", "Автоматическая запись встреч выключена "
+                                   "(Настройки → Основные → «Делать всё автоматически»)", "auto")
+                self.toast("Встреча началась, но автоматическая запись выключена.", seconds=20,
+                           action=("Записать", lambda: self.recorder is None and self.start_recording(
+                               "Пользователь начал запись", "user", by_meeting=True)))
         if decision.new == IDLE and decision.prev in (IN_MEETING, ENDING):
             if self.recorder is not None and self.rec_by_meeting:
                 cut_at = None
@@ -536,11 +546,18 @@ class App(MainWindow):
         try:
             self.hotkey = dictation.HotkeyListener(combo, lambda: put((self.toggle_dictation, ()))).start()
             self.dictation_status = f"работает: {combo}"
+            self._hotkey_tries = 0
             self._journal_note("Голосовой ввод включён", combo, "auto")
         except Exception as e:
             self.hotkey = None
             self.dictation_status = f"не работает: {e}"
             self.log.warning("Голосовой ввод: %s: %s", combo, e)
+            tries = getattr(self, "_hotkey_tries", 0)
+            if tries < 6 and "занято" in str(e):       # после обновления старая копия ещё держит сочетание
+                self._hotkey_tries = tries + 1
+                self.root.after(5000, self.setup_dictation)
+                return
+            self._hotkey_tries = 0
             self._journal_note("Голосовой ввод не включён", f"{combo}: {e}", "auto")
 
     def toggle_dictation(self):
@@ -1414,7 +1431,11 @@ class App(MainWindow):
         self.settings["recording_consent"] = bool(ok)
         if not ok:
             self.settings["record_meetings"] = False
+            self.settings["record_off_by_consent"] = True
             self.record_meetings.set(False)
+        elif self.settings.pop("record_off_by_consent", False):
+            self.settings["record_meetings"] = True        # выключали только из-за отказа — согласие вернуло
+            self.record_meetings.set(True)
         self.save_settings()
         return ok
 
