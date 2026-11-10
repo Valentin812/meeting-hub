@@ -619,6 +619,15 @@ class App(MainWindow):
                 if engine is None:
                     engine = self._dictation_engine = self.make_asr_engine()
                 text = dictation.transcribe(engine, samples, language)
+                mode = self.settings.get("dictation_mode", dictation.DEFAULT_MODE)
+                if text and mode in dictation.PROMPTS:
+                    self._ui_calls.put((lambda: self.toast("✍ Привожу текст в порядок…", seconds=6), ()))
+                    try:
+                        answer = self.llm_router().stream(dictation.ai_messages(mode, text), lambda _t: None,
+                                                          meeting="голосовой ввод")
+                        text = dictation.accept_ai(text, answer, mode)
+                    except Exception as e:                 # ИИ недоступен — вставляем как распознано
+                        self.log.warning("Голосовой ввод: обработка ИИ не удалась: %s", e)
             except Exception as e:
                 self.log.exception("Голосовой ввод")
                 err = str(e)

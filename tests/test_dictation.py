@@ -57,6 +57,16 @@ class DictationTests(unittest.TestCase):
         self.assertIsNone(dictation.combo_from_event(0x4, "??", True, 0x11))
         self.assertTrue(dictation.is_free("Ctrl+Alt+Space"))                   # не Windows — свободно
 
+    def test_ai_modes_and_guard(self):
+        raw = "ну вот значит завтра созвон в десять"
+        self.assertEqual(dictation.ai_messages("clean", raw)[1]["content"], raw)
+        self.assertIn("слова-паразиты", dictation.ai_messages("clean", raw)[0]["content"])
+        self.assertEqual(dictation.accept_ai(raw, "«Завтра созвон в 10:00.»", "clean"), "Завтра созвон в 10:00.")
+        self.assertEqual(dictation.accept_ai(raw, "", "clean"), raw)
+        self.assertEqual(dictation.accept_ai(raw, "Конечно! Вот исправленный текст: " * 5, "clean"), raw)
+        self.assertEqual(dictation.accept_ai(raw, "Завтра.", "punct"), raw)          # слова пропали — не берём
+        self.assertNotIn("raw", dictation.PROMPTS)
+
     def test_capture_and_transcribe(self):
         cap = dictation.MicCapture(Backend(0.3)).start()
         time.sleep(0.7)
