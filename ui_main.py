@@ -1217,6 +1217,12 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             win.bind("<KeyPress>", key)
         ttk.Button(drow, text="Записать сочетание", command=capture).pack(side="left")
         d_status.pack(side="left", padx=(8, 0))
+        mrow = ttk.Frame(p); mrow.pack(anchor="w", padx=(28, 0), pady=(4, 0))
+        ttk.Label(mrow, text="Текст").pack(side="left")
+        d_mode = tk.StringVar(value=dictation.MODES.get(s.get("dictation_mode", dictation.DEFAULT_MODE),
+                                                        dictation.MODES[dictation.DEFAULT_MODE]))
+        ttk.Combobox(mrow, textvariable=d_mode, values=list(dictation.MODES.values()), state="readonly",
+                     width=34).pack(side="left", padx=8)
         hint(p, "Нажмите «Записать сочетание» и нажмите нужные клавиши — программа сама их определит и проверит, "
                 "не заняты ли они другой программой. Потом в любой программе: сочетание — говорите — сочетание "
                 "ещё раз, и текст появится там, где курсор. Распознаётся на этом компьютере.")
@@ -1477,7 +1483,9 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                     return
             dict_changed = (bool(d_on.get()), d_key.get().strip()) != (
                 bool(s.get("dictation_enabled", True)), s.get("dictation_hotkey") or dictation.DEFAULT_HOTKEY)
-            s.update(dictation_enabled=bool(d_on.get()), dictation_hotkey=d_key.get().strip())
+            s.update(dictation_enabled=bool(d_on.get()), dictation_hotkey=d_key.get().strip(),
+                     dictation_mode=next((k for k, v in dictation.MODES.items() if v == d_mode.get()),
+                                         dictation.DEFAULT_MODE))
             if dict_changed:
                 self.setup_dictation()
             new_theme = dict(self.THEMES)[theme_var.get()]
