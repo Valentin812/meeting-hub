@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
-DEFAULT_URL = "https://samsonovtsi-chat-713b.twc1.net"     # рабочий адрес API (справка 29.10.2026)
+DEFAULT_URL = "https://crmdop.ru"          # рабочий адрес API (с 18.11.2026; при смене — секрет CRM_URL в Supabase)
 PROTOCOL_PATH = "/api/protocols"
 TITLE_MAX, PROTOCOL_MAX, TRANSCRIPT_MAX = 200, 60000, 250000
 SESSION_SEC = 8 * 3600
@@ -90,6 +90,25 @@ def _request(method, url, body=None, headers=None, timeout=30, opener=urllib.req
         raise err
     except (OSError, ValueError) as e:
         raise CrmError(f"нет связи с CRM: {getattr(e, 'reason', e)}")
+
+
+CONFIG_URL = "https://swprtuowqpuwgthigweq.supabase.co/functions/v1/giga-proxy?config=1"
+
+
+def discover_url(config_url=CONFIG_URL, opener=urllib.request.urlopen):
+    """Актуальный адрес CRM с нашего сервера (секрет CRM_URL в Supabase). Поменялся адрес у CRM — меняем секрет,
+    и все программы подхватывают его сами, без обновления. Пустая строка — узнать не удалось."""
+    try:
+        req = urllib.request.Request(config_url, headers={"User-Agent": "MeetingHub", "Accept": "application/json"})
+        with opener(req, timeout=15) as r:
+            return normalize_url(json.loads(r.read().decode("utf-8") or "{}").get("crm_url") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def address_problem(err):
+    """Ошибка похожа на смену адреса: нет связи или по адресу уже не API CRM."""
+    return str(err).startswith("нет связи с CRM") or getattr(err, "code", None) in (404, 405, 502, 503, 521, 522, 530)
 
 
 def normalize_url(url):

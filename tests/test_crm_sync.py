@@ -67,6 +67,18 @@ class CrmTests(unittest.TestCase):
         self.assertEqual(products[1], ("2", "Ремонты"))
         self.assertNotIn("X-product-id", crm.calls[-1][2])                   # без проекта — сервер берёт ваш
 
+    def test_discover_url_and_address_problem(self):
+        ok = lambda req, timeout=15: io.BytesIO(b'{"crm_url": "crm.example.ru/"}')
+        self.assertEqual(crm_sync.discover_url("https://cfg", opener=ok), "https://crm.example.ru")
+        def down(req, timeout=15):
+            raise OSError("no route")
+        self.assertEqual(crm_sync.discover_url("https://cfg", opener=down), "")
+        self.assertTrue(crm_sync.address_problem(crm_sync.CrmError("нет связи с CRM: timeout")))
+        e = crm_sync.CrmError("CRM ответила 404: not found"); e.code = 404
+        self.assertTrue(crm_sync.address_problem(e))
+        e = crm_sync.CrmError("CRM ответила 401: bad"); e.code = 401
+        self.assertFalse(crm_sync.address_problem(e))                          # неверный пароль — не адрес
+
     def test_bad_password(self):
         c = crm_sync.Client("https://example.ru", 7, "ivan", "wrong", opener=FakeCRM())
         with self.assertRaises(crm_sync.CrmError):

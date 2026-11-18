@@ -52,7 +52,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.45.0"
+APP_VERSION = "7.45.1"
 
 import support
 from support import app_dir, data_dir
@@ -856,12 +856,32 @@ class App(MainWindow):
         s = self.settings
         return bool(s.get("crm_login") and s.get("crm_password"))
 
+    def crm_base(self):
+        """Адрес CRM: свой (если вписан в настройках) → полученный с сервера → встроенный."""
+        import crm_sync
+        s = self.settings
+        return crm_sync.normalize_url(s.get("crm_url") or s.get("crm_url_remote") or crm_sync.DEFAULT_URL)
+
+    def crm_rediscover(self):
+        """Адрес мог поменяться: спросить актуальный у нашего сервера. True — адрес новый, стоит повторить."""
+        import crm_sync
+        if self.settings.get("crm_url"):
+            return False                                  # адрес вписан вручную — не трогаем
+        new = crm_sync.discover_url()
+        if new and new != self.crm_base():
+            self.settings["crm_url_remote"] = new
+            self._crm = None
+            self._ui_calls.put((self.save_settings, ()))
+            self._ui_calls.put((lambda: self._journal_note("CRM: новый адрес", new, "auto"), ()))
+            return True
+        return False
+
     def crm_client(self):
         import crm_sync
         s = self.settings
-        key = (s.get("crm_url"), s.get("crm_product"), s.get("crm_login"), s.get("crm_password"))
+        key = (self.crm_base(), s.get("crm_product"), s.get("crm_login"), s.get("crm_password"))
         if getattr(self, "_crm_key", None) != key or getattr(self, "_crm", None) is None:
-            self._crm = crm_sync.Client(s.get("crm_url"), s.get("crm_product"), s.get("crm_login"),
+            self._crm = crm_sync.Client(self.crm_base(), s.get("crm_product"), s.get("crm_login"),
                                         crm_sync.unprotect_password(s.get("crm_password")))
             self._crm_key = key
         return self._crm
@@ -884,7 +904,12 @@ class App(MainWindow):
 
         def work():
             try:
-                crm_sync.push(self.crm_client(), wav, with_transcript=with_text)
+                try:
+                    crm_sync.push(self.crm_client(), wav, with_transcript=with_text)
+                except crm_sync.CrmError as e:
+                    if not (crm_sync.address_problem(e) and self.crm_rediscover()):
+                        raise
+                    crm_sync.push(self.crm_client(), wav, with_transcript=with_text)   # по новому адресу
                 self.cloud_log.add("CRM", Path(wav).stem, "итоги, задачи и расшифровка" if with_text else "итоги и задачи")
                 note = ("Протокол отправлен в CRM", Path(wav).stem)
             except crm_sync.CrmError as e:
@@ -903,17 +928,23 @@ class App(MainWindow):
             self._ui_calls.put((done, ()))
         threading.Thread(target=work, name="crm-push", daemon=True).start()
 
-    def crm_check(self, product_name, login, password, parent=None, on_ok=None):
+    def crm_check(self, product_name, login, password, parent=None, on_ok=None, url=None):
         """Проверить вход в CRM; при успехе сохранить логин, пароль (зашифрованным) и проект.
-        Адрес CRM зашит в программу, проект берётся из CRM (по умолчанию — проект пользователя)."""
+        Адрес: вписанный вручную, иначе полученный с нашего сервера, иначе встроенный."""
         import crm_sync
-        url = self.settings.get("crm_url") or crm_sync.DEFAULT_URL
+        manual = crm_sync.normalize_url(url) if url is not None else None
 
         def work():
             products, product = [], ""
             try:
                 pwd = password or crm_sync.unprotect_password(self.settings.get("crm_password"))
-                who, default, products = crm_sync.Client(url, "", login, pwd).info()
+                base = manual or self.crm_base()
+                try:
+                    who, default, products = crm_sync.Client(base, "", login, pwd).info()
+                except crm_sync.CrmError as e:
+                    if manual or not (crm_sync.address_problem(e) and self.crm_rediscover()):
+                        raise
+                    who, default, products = crm_sync.Client(self.crm_base(), "", login, pwd).info()
                 chosen = next((pid for pid, name in products if name == product_name), "")
                 product = chosen or default
                 blob = crm_sync.protect_password(pwd)
@@ -928,6 +959,8 @@ class App(MainWindow):
                 pname = next((name for pid, name in products if pid == product), "")
                 self.settings.update(crm_product=product, crm_product_name=pname, crm_products=products,
                                      crm_login=login.strip(), crm_password=blob, crm_name=who)
+                if url is not None:
+                    self.settings["crm_url"] = manual or ""      # пусто — адрес снова автоматический
                 self._crm = None
                 self.save_settings()
                 messagebox.showinfo("CRM", f"Вход работает: {who}." + (f" Проект: {pname}." if pname else ""),
