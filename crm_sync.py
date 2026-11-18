@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
-DEFAULT_URL = "https://samsonovtsi-chat-713b.twc1.net"     # рабочий адрес API (справка 29.10.2026)
+DEFAULT_URL = "https://crmdop.ru"          # рабочий адрес API (с 18.11.2026; при смене — секрет CRM_URL в Supabase)
 PROTOCOL_PATH = "/api/protocols"
 TITLE_MAX, PROTOCOL_MAX, TRANSCRIPT_MAX = 200, 60000, 250000
 SESSION_SEC = 8 * 3600

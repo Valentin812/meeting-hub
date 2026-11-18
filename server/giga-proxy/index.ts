@@ -73,7 +73,7 @@ async function accessToken(service = "giga"): Promise<{ token: string; until: nu
 
 const KANBAN_CHECK = "https://vdlfdnhfiiltdyrucdtn.supabase.co/functions/v1/meeting-intake";
 const KANBAN_KEY = "sb_publishable_uXYluucSC1Grq-Tub20S6Q_rvDJj7HH";   // открытый ключ приложения Канбан
-const CRM_DEFAULT = "https://samsonovtsi-chat-713b.twc1.net";
+const CRM_DEFAULT = "https://crmdop.ru";
 const passCache = new Map<string, { name: string; until: number }>();   // sha256(пропуска) → кто, до когда
 
 async function digest(text: string): Promise<string> {
