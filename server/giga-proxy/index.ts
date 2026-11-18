@@ -162,6 +162,10 @@ function queued<T>(job: () => Promise<T>): Promise<T> {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
+  // Публичные настройки для программы (без секретов): актуальный адрес CRM. Сменился адрес — меняем секрет CRM_URL.
+  if (req.method === "GET" && new URL(req.url).searchParams.has("config")) {
+    return json({ crm_url: (Deno.env.get("CRM_URL") || CRM_DEFAULT).replace(/\/$/, "") });
+  }
   const name = await who(req);
   if (!name) return json({ error: "пропуск не принят: подключите Канбан или CRM в программе или проверьте код доступа" }, 401);
   if (limited(name)) return json({ error: "слишком много запросов, попробуйте позже" }, 429);

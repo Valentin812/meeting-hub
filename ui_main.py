@@ -1383,6 +1383,13 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         c_prod_box.grid(row=3, column=1, sticky="w", padx=8, pady=(6, 2))
         ttk.Label(cgrid, text="Список появится после проверки входа; по умолчанию — ваш проект в CRM.",
                   style="Small.TLabel").grid(row=4, column=1, sticky="w", padx=8)
+        c_url = tk.StringVar(value=s.get("crm_url", ""))
+        ttk.Label(cgrid, text="Адрес CRM").grid(row=5, column=0, sticky="w", pady=(6, 2))
+        ttk.Entry(cgrid, textvariable=c_url, width=34).grid(row=5, column=1, sticky="w", padx=8, pady=(6, 2))
+        c_url_note = ttk.Label(cgrid, style="Small.TLabel", wraplength=360, justify="left",
+                               text="Обычно оставьте пустым — адрес берётся автоматически (сейчас: "
+                                    + self.crm_base() + "). Вписывайте, только если CRM переехала.")
+        c_url_note.grid(row=6, column=1, sticky="w", padx=8)
         c_auto = tk.BooleanVar(value=bool(s.get("crm_auto", True)))
         ttk.Checkbutton(p, text="Отправлять каждую готовую встречу автоматически", variable=c_auto).pack(
             anchor="w", padx=(28, 0), pady=(6, 0))
@@ -1392,8 +1399,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
                         if self.crm_configured() else "Не подключено")
             c_prod_box.configure(values=[n for _i, n in s.get("crm_products") or []])
             c_prod.set(s.get("crm_product_name", ""))
+            c_url_note.config(text="Обычно оставьте пустым — адрес берётся автоматически (сейчас: "
+                                   + self.crm_base() + "). Вписывайте, только если CRM переехала.")
         ttk.Button(crow, text="Проверить вход и сохранить", command=lambda: self.crm_check(
-            c_prod.get(), c_login.get(), c_pwd.get(), win, refresh_c)).pack(side="left")
+            c_prod.get(), c_login.get(), c_pwd.get(), win, refresh_c, url=c_url.get())).pack(side="left")
         ttk.Button(crow, text="Отключить", command=lambda: (self.crm_disconnect(), refresh_c())).pack(
             side="left", padx=(8, 0))
 
