@@ -163,9 +163,26 @@ def check_ui():
     app = app_mod.App(root)
     seen = []
 
+    def guard(fn):
+        """Ошибка в шаге — сразу видимый провал (с текстом в аннотации), а не зависание до таймаута."""
+        def run(*a):
+            try:
+                fn(*a)
+            except BaseException as e:                # noqa: BLE001
+                import traceback
+                traceback.print_exc()
+                print(f"::error title=smoke step {fn.__name__}::{type(e).__name__}: {e}", flush=True)
+                seen.append("FAILED")
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
+        run.__name__ = fn.__name__
+        return run
+
     def step(n=0):
         if n < 4:
-            root.after(300, step, n + 1)
+            root.after(300, guard(step), n + 1)
             return
         # Останавливаем цикл опроса, чтобы реальные окна раннера не меняли состояние во время проверки.
         if app._tick_job is not None:
@@ -192,7 +209,7 @@ def check_ui():
         app.record_meetings.set(True)
         app.user_action("manual_start")
         assert app.recorder is not None, app.last_event_text
-        root.after(1500, finish_recording)
+        root.after(1500, guard(finish_recording))
 
     def finish_recording():
         app.refresh_status()
@@ -203,8 +220,8 @@ def check_ui():
 
     def wait_saved(n=0):
         app.drain_ui_calls()
-        if app._saving_threads and n < 50:
-            root.after(200, wait_saved, n + 1)
+        if app._saving_threads and n < 150:
+            root.after(200, guard(wait_saved), n + 1)
             return
         assert not app._saving_threads, "запись не сохранилась"
         app.refresh_records()
@@ -233,7 +250,9 @@ def check_ui():
         seen.append("recorded")
         app.quit_app()
 
-    root.after(500, step)
+    root.after(500, guard(step))
+    root.after(240_000, lambda: (print("::error title=smoke::UI test did not finish in 4 min", flush=True),
+                                 seen.append("TIMEOUT"), root.destroy()))
     root.mainloop()
     assert seen == [COUNTDOWN, ASKING, ENDING, "recorded"], seen
     wavs = list((work / "recordings").glob("*.wav"))
@@ -256,6 +275,11 @@ if __name__ == "__main__":
         except Exception:
             # Аннотация видна в интерфейсе GitHub и через API, даже когда сам лог недоступен.
             text = traceback.format_exc().strip().replace("%", "%25").replace("\r", "").replace("\n", "%0A")
-            print(f"::error title={check.__name__}::{text}")
-            sys.exit(1)
-    print("SMOKE OK")
+            print(f"::error title={check.__name__}::{text}", flush=True)
+            os._exit(1)                                  # не ждём фоновые потоки — иначе тест мог зависнуть
+    import threading
+    alive = [t.name for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon]
+    if alive:
+        print(f"::warning title=smoke::не фоновые потоки при выходе: {alive}", flush=True)
+    print("SMOKE OK", flush=True)
+    os._exit(0)
