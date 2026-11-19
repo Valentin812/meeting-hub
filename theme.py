@@ -84,6 +84,36 @@ THEMES = {
 ORDER = ["light", "dark", "latte", "cappuccino", "mac", "mac_dark", "pixel", "win95"]
 
 
+def enable_dpi_awareness():
+    """Windows: программа сама рисует под масштаб экрана (125%, 150%…), иначе система растягивает
+    картинку окна и текст «плывёт». Вызывать до создания окна Tk."""
+    if os.name != "nt":
+        return False
+    import ctypes
+    try:
+        return ctypes.windll.shcore.SetProcessDpiAwareness(1) == 0      # «знает» системный масштаб
+    except Exception:
+        try:
+            return bool(ctypes.windll.user32.SetProcessDPIAware())
+        except Exception:
+            return False
+
+
+def ui_scale(widget):
+    """Во сколько раз крупнее 100% (1.0 — обычный экран, 1.25 — масштаб 125%)."""
+    try:
+        return max(1.0, min(3.0, float(widget.tk.call("tk", "scaling")) / (96.0 / 72.0)))
+    except Exception:
+        return 1.0
+
+
+def size(widget, w, h):
+    """Размер окна «WxH» с учётом масштаба экрана, но не больше самого экрана."""
+    k = ui_scale(widget)
+    sw, sh = widget.winfo_screenwidth(), widget.winfo_screenheight()
+    return f"{min(int(w * k), sw - 40)}x{min(int(h * k), sh - 80)}"
+
+
 def windows_dark():
     if os.name != "nt":
         return False
