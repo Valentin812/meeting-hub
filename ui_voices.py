@@ -262,7 +262,7 @@ class VoicesUI:
         win = tk.Toplevel(self.root)
         win.title("Кто говорит?")
         win.transient(self.root)
-        win.minsize(560, 320)
+        win.minsize(*(int(v) for v in theme.size(win, 560, 320).split("x")))
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
         step = ttk.Label(frm, style="Small.TLabel")
@@ -587,7 +587,7 @@ class VoicesUI:
         win = tk.Toplevel(parent or self.root)
         win.title("Известные голоса")
         win.transient(parent or self.root)
-        win.geometry("420x360")
+        win.geometry(theme.size(win, 420, 360))
         frm = ttk.Frame(win, padding=14)
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, text="Люди, чьи голоса программа узнаёт. Новые добавляются, когда вы подписываете "

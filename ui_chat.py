@@ -186,7 +186,7 @@ class ChatUI:
             return
         win = self.all_chat_win = tk.Toplevel(self.root)
         win.title("Чат по всем встречам")
-        win.geometry("720x560")
+        win.geometry(theme.size(win, 720, 560))
         frame = ttk.Frame(win, padding=12)
         frame.pack(fill="both", expand=True)
         log = tk.Text(frame, wrap="word", height=10)

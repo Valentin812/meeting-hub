@@ -95,8 +95,9 @@ class Pill(tk.Canvas):
     """Скруглённая метка: текст на цветном фоне."""
 
     def __init__(self, master, pal, size=10):
-        super().__init__(master, height=28, width=120, highlightthickness=0, bd=0, bg=pal["bg"])
         self.font = tkfont.Font(family=theme.FONT, size=size, weight="bold")
+        self.h = max(28, self.font.metrics("linespace") + 10)          # при масштабе 125%+ метка выше
+        super().__init__(master, height=self.h, width=120, highlightthickness=0, bd=0, bg=pal["bg"])
         self.pal = pal
         self._last = None
 
@@ -115,11 +116,12 @@ class Pill(tk.Canvas):
         w = self.font.measure(text) + 28
         self.configure(width=w)
         self.delete("all")
+        h = self.h
         if self.pal.get("relief") == "pixel":
-            _pixel_rect(self, 1, 2, w - 1, 26, 3, fill=bg, outline=bg)
+            _pixel_rect(self, 1, 2, w - 1, h - 2, 3, fill=bg, outline=bg)
         else:
-            _round_rect(self, 1, 2, w - 1, 26, 12, fill=bg, outline=bg)
-        self.create_text(w // 2, 14, text=text, fill=fg, font=self.font)
+            _round_rect(self, 1, 2, w - 1, h - 2, (h - 4) // 2, fill=bg, outline=bg)
+        self.create_text(w // 2, h // 2, text=text, fill=fg, font=self.font)
 
     def cget_text(self):
         return self._last[0] if self._last else ""

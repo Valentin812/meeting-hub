@@ -99,9 +99,10 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
     # ------------------------------------------------------------------
     def build_main_ui(self):
         root, pal = self.root, self.pal
-        root.minsize(900, 560)
-        w = min(1180, root.winfo_screenwidth() - 60)
-        h = min(760, root.winfo_screenheight() - 90)
+        k = theme.ui_scale(root)
+        root.minsize(min(int(900 * k), root.winfo_screenwidth() - 40), min(int(560 * k), root.winfo_screenheight() - 80))
+        w = min(int(1180 * k), root.winfo_screenwidth() - 60)
+        h = min(int(760 * k), root.winfo_screenheight() - 90)
         root.geometry(f"{w}x{h}+{max(0, (root.winfo_screenwidth() - w) // 2)}+20")
 
         self._icons = {"logo": widgets.app_icon(30), "window": widgets.app_icon(64)}
@@ -1106,8 +1107,8 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
         win = self.settings_win = tk.Toplevel(self.root)
         win.title("Настройки")
         win.transient(self.root)
-        win.geometry("660x640")
-        win.minsize(560, 480)
+        win.geometry(theme.size(win, 660, 640))
+        win.minsize(*(int(v) for v in theme.size(win, 560, 480).split("x")))
         s = self.settings
         nb = ttk.Notebook(win)
         nb.pack(fill="both", expand=True, padx=14, pady=(14, 0))
@@ -1555,7 +1556,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
     def open_cloud_log(self):
         win = tk.Toplevel(self.root)
         win.title("Журнал отправок в облако")
-        win.geometry("900x420")
+        win.geometry(theme.size(win, 900, 420))
         frame = ttk.Frame(win, padding=12)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, style="Muted.TLabel", wraplength=860, justify="left", text=(
@@ -1582,7 +1583,7 @@ class MainWindow(VoicesUI, ChatUI, AiSetupUI):
             return
         win = self.journal_win = tk.Toplevel(self.root)
         win.title("Журнал обнаружения и обучение")
-        win.geometry("1180x640")
+        win.geometry(theme.size(win, 1180, 640))
         frame = ttk.Frame(win, padding=12)
         frame.pack(fill="both", expand=True)
         self.build_training_panel(frame)

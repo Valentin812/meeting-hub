@@ -52,7 +52,7 @@ from meeting_detector import (MeetingDetector, DEFAULT_PATTERNS, STATE_LABELS, B
                               suggest_pattern, strip_browser_suffix)
 from training_store import TrainingStore
 
-APP_VERSION = "7.45.1"
+APP_VERSION = "7.45.2"
 
 import support
 from support import app_dir, data_dir
@@ -170,7 +170,7 @@ class FirstRunWizard(tk.Toplevel):
         super().__init__(app.root)
         self.app = app
         self.title("Meeting Hub — настройка")
-        self.geometry("760x720")
+        self.geometry(theme.size(self, 760, 720))
         self.transient(app.root)
         self.protocol("WM_DELETE_WINDOW", self.finish)
         box = ttk.Frame(self, padding=16)
@@ -2351,6 +2351,7 @@ def main():
     if args[:1] == ["--record-test"]:
         cli_record(float(args[1]) if len(args) > 1 else 3.0)
         return
+    theme.enable_dpi_awareness()                    # до создания окна: чёткий текст при масштабе 125%, 150%…
     root = tk.Tk()
     app = App(root)
     if "--minimized" in args and app.settings.get("first_run_done"):
