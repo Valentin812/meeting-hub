@@ -90,13 +90,38 @@ def enable_dpi_awareness():
     if os.name != "nt":
         return False
     import ctypes
-    try:
-        return ctypes.windll.shcore.SetProcessDpiAwareness(1) == 0      # «знает» системный масштаб
+    user32 = ctypes.windll.user32
+    try:                                            # Windows 10 1703+: контекст «знает системный масштаб»
+        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-2)):
+            return True
     except Exception:
-        try:
-            return bool(ctypes.windll.user32.SetProcessDPIAware())
-        except Exception:
-            return False
+        pass
+    try:                                            # Windows 8.1+
+        if ctypes.windll.shcore.SetProcessDpiAwareness(1) == 0:
+            return True
+    except Exception:
+        pass
+    try:                                            # Windows Vista+
+        return bool(user32.SetProcessDPIAware())
+    except Exception:
+        return False
+
+
+def dpi_state():
+    """Для журнала: (масштаб экрана в %, рисует ли программа сама под масштаб)."""
+    if os.name != "nt":
+        return 100, True
+    import ctypes
+    try:
+        dpi = ctypes.windll.user32.GetDpiForSystem()
+    except Exception:
+        dpi = 96
+    try:
+        aware = ctypes.windll.user32.IsProcessDPIAware() != 0
+    except Exception:
+        aware = False
+    return round(dpi * 100 / 96), aware
 
 
 def ui_scale(widget):
