@@ -2351,9 +2351,15 @@ def main():
     if args[:1] == ["--record-test"]:
         cli_record(float(args[1]) if len(args) > 1 else 3.0)
         return
-    theme.enable_dpi_awareness()                    # до создания окна: чёткий текст при масштабе 125%, 150%…
+    dpi_ok = theme.enable_dpi_awareness()           # до создания окна: чёткий текст при масштабе 125%, 150%…
     root = tk.Tk()
     app = App(root)
+    scale, aware = theme.dpi_state()
+    app.log.info("Масштаб экрана %s%%, режим чёткости: %s (вызов %s), tk scaling %.3f", scale, aware, dpi_ok,
+                 float(root.tk.call("tk", "scaling")))
+    if scale != 100 and not aware:
+        app._journal_note("Масштаб экрана", f"{scale}%: Windows растягивает окно программы — текст может быть "
+                          "нечётким. Сообщите разработчику.", "auto")
     if "--minimized" in args and app.settings.get("first_run_done"):
         if app.tray is not None:
             root.withdraw()
