@@ -16,8 +16,23 @@ class AiSetupUI:
             self.settings["ollama_model"] = model
             self.save_settings()
 
-    def offer_ai_setup(self, why=""):
-        """Предложить установить ИИ (не чаще раза за запуск, если не просили сами)."""
+    def offer_ai_setup(self, why="", automatic=False):
+        """Предложить установить локальную модель. Сами (без нажатия пользователя) — только когда она
+        действительно нужна: облако (GigaChat) не подключено. И не окном, а уведомлением, не чаще раза в день;
+        если отказались — больше сами не предлагаем (установить можно в настройках)."""
+        if automatic:
+            if self.settings.get("giga_enabled") and self.giga_pass_available():
+                return                                   # итоги делает GigaChat — локальная модель не обязательна
+            if self.settings.get("ai_setup_declined"):
+                return
+            import time as _t
+            if _t.time() - float(self.settings.get("ai_offer_at") or 0) < 24 * 3600:
+                return
+            self.settings["ai_offer_at"] = _t.time()
+            self.save_settings()
+            self.toast((why + " " if why else "") + "Для итогов нужна локальная модель ИИ (или GigaChat в настройках).",
+                       seconds=30, action=("Установить ИИ…", self.open_ai_setup))
+            return
         if getattr(self, "_ai_offered", False):
             return
         self._ai_offered = True
@@ -26,6 +41,9 @@ class AiSetupUI:
                                "записи никуда не отправляются. Скачать и установить её сейчас? Это около 2–3 ГБ, "
                                "делается один раз.", parent=self.root):
             self.open_ai_setup()
+        else:
+            self.settings["ai_setup_declined"] = True     # сами больше не напоминаем
+            self.save_settings()
 
     def open_ai_setup(self):
         if getattr(self, "_ai_win", None) is not None and self._ai_win.winfo_exists():

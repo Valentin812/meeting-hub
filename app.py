@@ -2194,7 +2194,7 @@ class App(MainWindow):
         if "Connection refused" in err or "urlopen error" in err or "10061" in err:
             err = ("ИИ для итогов не установлен или не запущен. Откройте ⚙ → «Расшифровка и итоги» → "
                    "«Установить ИИ…» — программа всё сделает сама.")
-            self.root.after(500, lambda: self.offer_ai_setup("Итоги не подготовлены."))
+            self.root.after(500, lambda: self.offer_ai_setup("Итоги не подготовлены.", automatic=automatic))
         self.last_event_text = "Итоги не получены: " + err[:200]
         self._journal_note("Ошибка итогов", err[:300], "auto")
         if src is not None:
